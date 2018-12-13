@@ -6,7 +6,7 @@
 
 /* .h4m (HVQM4 1.3/1.5) audio decoder 0.3 by hcs */
 
-//#define VERBOSE_PRINT
+#define VERBOSE_PRINT
 
 /* big endian */
 
@@ -220,6 +220,229 @@ static void decode_audio(struct audio_state *state, int first_aud, uint32_t samp
     free(samples);
 }
 
+/* video stuff */
+
+static void dcBlock(uint8_t *dst, uint32_t stride, uint8_t value)
+{
+    for (int i = 0; i < 4; ++i)
+    {
+        dst[0] = value;
+        dst[1] = value;
+        dst[2] = value;
+        dst[3] = value;
+        dst += stride;
+    }
+}
+
+typedef struct
+{
+    uint32_t pos;
+    int32_t tree_unk4;
+    uint32_t array0[0x200]; // 8+
+    uint32_t array1[0x200]; // 0x808+
+} Tree;
+
+typedef struct
+{
+    uint32_t *ptr;  // 0-3
+    uint32_t buf_unk4;  // 4-7
+    uint32_t value; // 8-11
+    int32_t bit;    // 12-15
+    Tree *tree;     // 16-20
+} BitBuffer;
+
+static int16_t getBit(BitBuffer *buf)
+{
+    int32_t bit = buf->bit;
+    if (bit < 0)
+    {
+        buf->value = *buf->ptr++;
+        bit = 31;
+    }
+    buf->bit = bit - 1;
+    return (buf->value >> bit) & 1;
+}
+
+static int16_t getByte(BitBuffer *buf)
+{
+    uint32_t value = buf->value;
+    int32_t bit = buf->bit;
+    if (bit < 7)
+    {
+        buf->value = *buf->ptr++;
+        value <<= 7 - bit;
+        value |= buf->value >> (bit + 25);
+        bit += 24;
+    }
+    else
+    {
+        value >>= bit - 7;
+        bit -= 8;
+    }
+    buf->bit = bit;
+    return value & 0xFF;
+}
+
+static uint32_t readTree_signed;
+static uint32_t readTree_scale;
+
+static int16_t _readTree(Tree *dst, BitBuffer *src)
+{
+    if (getBit(src) == 0)
+    {
+        int16_t byte = getByte(src);
+        int16_t value = byte;
+        if (readTree_signed && value > 0x7F)
+            value -= 0x100;
+        value <<= readTree_scale;
+        dst->array0[byte] = value;
+        return byte;
+    }
+    else
+    {
+        uint32_t pos = dst->pos++;
+        dst->array0[pos] = _readTree(dst, src);
+        dst->array1[pos] = _readTree(dst, src);
+        return (int16_t)pos;
+    }
+}
+
+static void readTree(BitBuffer *buf, uint32_t isSigned, uint32_t scale)
+{
+    readTree_signed = isSigned;
+    readTree_scale = scale;
+    Tree *tree = buf->tree;
+    tree->pos = 0x100;
+    if (buf->buf_unk4 == 0)
+    {
+        tree->tree_unk4 = 0;
+    }
+    else
+    {
+        tree->tree_unk4 = _readTree(tree, buf);
+    }
+}
+
+static uint32_t decodeHuff(BitBuffer *buf)
+{
+    Tree *tree = buf->tree;
+    int32_t tree_unk4 = tree->tree_unk4;
+    while (tree_unk4 >= 0x100)
+        tree_unk4 = tree->array0[(getBit(buf) << 9) + tree_unk4];
+    return tree->array0[tree_unk4];
+}
+
+static int32_t decodeSOvfSym(BitBuffer *buf, int32_t a, int32_t b)
+{
+    int32_t sum = 0;
+    int32_t value;
+    do
+    {
+        value = decodeHuff(buf);
+        sum += value;
+    } while (a >= value && value >= b);
+    return sum;
+}
+
+typedef struct
+{
+    BitBuffer bitBufs0[3]; // 0x60D8, unknown array size
+    BitBuffer bitBufs1[3]; // 0x6114, unknown array size
+    uint32_t boundA; // 0x6CCC
+    uint32_t boundB; // 0x6CC8
+} VideoState;
+
+typedef struct
+{
+    VideoState *state;
+    uint16_t width;
+    uint16_t height;
+    uint8_t h_samp;
+    uint8_t v_samp;
+} SeqObj;
+
+typedef struct
+{
+    uint16_t hres;
+    uint16_t vres;
+    uint8_t h_samp;
+    uint8_t v_samp;
+    uint8_t video_mode;
+} VideoInfo;
+
+static void HVQM4InitSeqObj(SeqObj *seqobj, VideoInfo *videoinfo)
+{
+    seqobj->width = videoinfo->hres;
+    seqobj->height = videoinfo->vres;
+    seqobj->h_samp = videoinfo->h_samp;
+    seqobj->v_samp = videoinfo->v_samp;
+}
+
+static uint32_t HVQM4BuffSize(SeqObj *seqobj)
+{
+    uint32_t hblocks = seqobj->width / 4;
+    uint32_t vblocks = seqobj->height / 4;
+    uint32_t blocks = (hblocks + 2) * (vblocks + 2);
+    uint32_t hsamp = seqobj->h_samp == 2 ? hblocks / 2 : hblocks;
+    uint32_t vsamp = seqobj->v_samp == 2 ? vblocks / 2 : vblocks;
+    uint32_t samps = (hsamp + 2) * (vsamp + 2) * 2;
+    return (blocks + samps) * 2 + sizeof(VideoState);
+}
+
+static uint32_t getDeltaDC(VideoState *state, uint32_t buf_idx, uint32_t *ptr)
+{
+    if (*ptr == 0)
+    {
+        uint32_t symbol = decodeSOvfSym(&state->bitBufs0[buf_idx], state->boundA, state->boundB);
+        if (symbol == 0)
+            *ptr = decodeHuff(&state->bitBufs1[buf_idx]);
+        return symbol;
+    }
+    else
+    {
+        --(*ptr);
+        return 0;
+    }
+}
+
+static void IpicDcvDec(VideoState *state)
+{
+    for (int32_t i = 0; i < 3; ++i)
+    {
+    }
+}
+
+static void HVQM4DecodeIpic(SeqObj *seqobj, uint8_t *frame)
+{
+    // TODO
+}
+
+static void HVQM4DecodeBpic(SeqObj *seqobj, uint8_t *frame)
+{
+    // TODO
+}
+
+static void HVQM4DecodePpic(SeqObj *seqobj, uint8_t *frame)
+{
+    HVQM4DecodeBpic(seqobj, frame);
+}
+
+static void decode_video(SeqObj *seqobj, FILE *infile, uint16_t frame_type, uint32_t frame_size)
+{
+    uint32_t pos = ftell(infile);
+    uint8_t *frame = malloc(frame_size);
+    fread(frame, frame_size, 1, infile);
+    uint32_t frame_id = read32(frame); frame += 4;
+    printf("video frame ID: %u\n", frame_id);
+    switch (frame_type)
+    {
+    case 0x10: puts("I frame"); HVQM4DecodeIpic(seqobj, frame); break;
+    case 0x20: puts("P frame"); HVQM4DecodePpic(seqobj, frame); break;
+    case 0x30: puts("B frame"); HVQM4DecodeBpic(seqobj, frame); break;
+    }
+    fseek(infile, pos + frame_size, SEEK_SET);
+}
+
 /* stream structure */
 
 const char HVQM4_13_magic[16] = "HVQM4 1.3";
@@ -238,14 +461,15 @@ struct HVQM4_header
     uint32_t blocks;        /* 0x18-0x1B */
     uint32_t audio_frames;  /* 0x1C-0x1F */
     uint32_t video_frames;  /* 0x20-0x23 */
-    uint32_t unk24;         /* 0x24-0x27 (0x8257,0x8256) */
+    uint32_t usec_per_frame;/* 0x24-0x27 (33366, 33367, 40000) */
     uint32_t duration;      /* 0x28-0x2B */
     uint32_t unk2C;         /* 0x2C-0x2F (0) */
     uint32_t audio_frame_sz;/* 0x30-0x33 */
     uint16_t hres;          /* 0x34-0x35 */
     uint16_t vres;          /* 0x36-0x37 */
-    uint16_t unk38;         /* 0x38-0x3B (0x0202) */
-    uint8_t  unk3A;         /* 0x3A (0 or 0x12) */
+    uint8_t  hsamp;         /* 0x38 */
+    uint8_t  vsamp;         /* 0x39 */
+    uint8_t  video_mode;    /* 0x3A (0 or 0x12) */
     uint8_t  unk3B;         /* 0x3B (0) */
     uint8_t  audio_channels;/* 0x3C */
     uint8_t  audio_bitdepth;/* 0x3D */
@@ -275,14 +499,15 @@ static void load_header(struct HVQM4_header *header, uint8_t *raw_header)
     header->blocks = read32(&raw_header[0x18]);
     header->audio_frames = read32(&raw_header[0x1C]);
     header->video_frames = read32(&raw_header[0x20]);
-    header->unk24 = read32(&raw_header[0x24]);
+    header->usec_per_frame = read32(&raw_header[0x24]);
     header->duration = read32(&raw_header[0x28]);
     header->unk2C = read32(&raw_header[0x2C]);
     header->audio_frame_sz = read32(&raw_header[0x30]);
     header->hres = read16(&raw_header[0x34]);
     header->vres = read16(&raw_header[0x36]);
-    header->unk38 = read16(&raw_header[0x38]);
-    header->unk3A = raw_header[0x3A];
+    header->hsamp = raw_header[0x38];
+    header->vsamp = raw_header[0x39];
+    header->video_mode = raw_header[0x3A];
     header->unk3B = raw_header[0x3B];
     header->audio_channels = raw_header[0x3C];
     header->audio_bitdepth = raw_header[0x3D];
@@ -314,10 +539,9 @@ static void load_header(struct HVQM4_header *header, uint8_t *raw_header)
     expect32_imm(0, header->unk2C, 0x2C);
     //expect32_text(0x650, header->audio_frame_sz, "audio frame size");
     /* no check for hres, vres */
-    expect32_imm(0x0202, header->unk38, 0x38);
-    if (header->unk3A != 0 && header->unk3A != 0x12)
+    if (header->video_mode != 0 && header->video_mode != 0x12)
     {
-        expect32_imm(0, header->unk3A, 0x3A);
+        expect32_imm(0, header->video_mode, 0x3A);
     }
     expect32_imm(0, header->unk3B, 0x3B);
     //expect32_imm(0x02100000, header->unk3C, 0x3C);
@@ -339,7 +563,7 @@ void display_header(struct HVQM4_header *header)
     printf("Body size:   0x%"PRIx32"\n", header->body_size);
     printf("Duration:    %"PRIu32" (?)\n", header->duration);
     printf("Resolution:  %"PRIu32" x %"PRIu32"\n", header->hres, header->vres);
-    printf("unk24:       0x%"PRIu32"\n", header->unk24);
+    printf("µs/frame:       0x%"PRIu32"\n", header->usec_per_frame);
     printf("%d Blocks\n", header->blocks);
     printf("%d Video frames\n", header->video_frames);
     if (header->audio_frames)
@@ -469,7 +693,10 @@ int main(int argc, char **argv)
         fprintf(stderr, "error writing riff header\n");
         exit(EXIT_FAILURE);
     }
-    
+
+    SeqObj seqobj;
+    HVQM4InitSeqObj(&seqobj, (VideoInfo*)&header.hres);
+
     /* parse blocks */
     uint32_t block_count = 0;
     uint32_t total_aud_frames = 0;
@@ -489,7 +716,7 @@ int main(int argc, char **argv)
 
         block_count ++;
 #ifdef VERBOSE_PRINT
-        printf("block %d starts at 0x%lx, length 0x%"PRIx32"\n", (int)block_count, block_start, expected_block_size);
+        printf("\n\nblock %d starts at 0x%lx, length 0x%"PRIx32"\n", (int)block_count, block_start, expected_block_size);
 #endif
 
         /* parse frames */
@@ -507,7 +734,7 @@ int main(int argc, char **argv)
             const uint32_t frame_size = get32(infile);
 
 #ifdef VERBOSE_PRINT
-            printf("frame id 0x%"PRIx16",0x%"PRIx16" ",frame_id1,frame_id2);
+            printf("\nframe id 0x%"PRIx16",0x%"PRIx16" ",frame_id1,frame_id2);
             printf("size 0x%"PRIx32"\n", frame_size);
 #endif
 
@@ -524,7 +751,7 @@ int main(int argc, char **argv)
 #ifdef VERBOSE_PRINT
                 printf("video frame %d/%d (%d)\n", (int)vid_frame_count, (int)expected_vid_frame_count, (int)total_vid_frames);
 #endif
-                seek_past(frame_size, infile);
+                decode_video(&seqobj, infile, frame_id2, frame_size);
             }
             else if (frame_id1 == 0 &&
                 ((first_aud && ( frame_id2 == 3 || frame_id2 == 1)) ||
