@@ -6,7 +6,7 @@
 
 /* .h4m (HVQM4 1.3/1.5) audio decoder 0.3 by hcs */
 
-#define VERBOSE_PRINT
+//#define VERBOSE_PRINT
 
 /* big endian */
 
@@ -22,13 +22,13 @@ static uint8_t get8(FILE *infile)
     return buf[0];
 }
 
-static uint16_t read16(uint8_t * buf)
+static uint16_t read16(void const * buf)
 {
     uint32_t v = 0;
     for (int i = 0; i < 2; i++)
     {
         v <<= 8;
-        v |= buf[i];
+        v |= ((uint8_t const *)buf)[i];
     }
     return v;
 }
@@ -44,13 +44,13 @@ static uint16_t get16(FILE * infile)
     return read16(buf);
 }
 
-static uint32_t read32(uint8_t * buf)
+static uint32_t read32(void const * buf)
 {
     uint32_t v = 0;
     for (int i = 0; i < 4; i++)
     {
         v <<= 8;
-        v |= buf[i];
+        v |= ((uint8_t const*)buf)[i];
     }
     return v;
 }
@@ -222,8 +222,31 @@ static void decode_audio(struct audio_state *state, int first_aud, uint32_t samp
 
 /* video stuff */
 
+static uint8_t clipTable[0x200];
+static uint32_t divTable[0x10];
+static uint32_t mcdivTable[0x200];
+
+static void init_global_constants()
+{
+    for (int i = 0, j = -0x80; i < 0x200; ++i, ++j)
+        clipTable[i] = j < 0 ? 0 : (j > 0xff ? 0xff : (j & 0xff));
+    divTable[0] = 0;
+    mcdivTable[0] = 0;
+    for (int i = 1; i < 0x10; ++i)
+        divTable[i] = 0x1000 / (i * 16) * 16;
+    for (int i = 1; i < 0x200; ++i)
+        mcdivTable[i] = 0x1000 / i;
+}
+
+void HVQM4InitDecoder()
+{
+    init_global_constants();
+}
+
+// done
 static void dcBlock(uint8_t *dst, uint32_t stride, uint8_t value)
 {
+    printf("  dcBlock()\n");
     for (int i = 0; i < 4; ++i)
     {
         dst[0] = value;
@@ -232,6 +255,54 @@ static void dcBlock(uint8_t *dst, uint32_t stride, uint8_t value)
         dst[3] = value;
         dst += stride;
     }
+}
+
+static void WeightImBlock(uint8_t *dst, uint32_t stride, uint8_t unk5, uint8_t unk6, uint8_t unk7, uint8_t unk8, uint8_t unk9)
+{
+    printf("  WeightImBlock(dst=%p, stride=%u, %u, %u,%u,%u,%u)\n", dst, stride, unk5, unk6, unk7, unk8, unk9);
+    int32_t diff0 = unk6 - unk7;
+    int32_t diff1 = unk8 - unk9;
+    int32_t r29 = diff0 + diff1;
+    int32_t r28 = diff0 - diff1;
+
+    int32_t r27 = unk5 << 1;
+    int32_t r31 = (unk5 << 3) + 4;
+
+    int32_t r24 = (unk6 + unk8) - r27;
+    int32_t r23 = (unk6 + unk9) - r27;
+    int32_t r22 = (unk7 + unk9) - r27;
+    int32_t r21 = (unk8 + unk7) - r27;
+
+    int32_t r20 = unk6 - unk8;
+    int32_t r19 = unk6 - unk9;
+    int32_t r18 = unk7 - unk9;
+    int32_t r17 = unk7 - unk8;
+
+    dst[0] = clipTable[((r29 + r24 + r31) >> 3) + 0x80];
+    dst[1] = clipTable[((r29 + r20 + r31) >> 3) + 0x80];
+    dst[2] = clipTable[((r28 + r19 + r31) >> 3) + 0x80];
+    dst[3] = clipTable[((r28 + r23 + r31) >> 3) + 0x80];
+
+    dst += stride;
+
+    dst[0] = clipTable[((r31 + r29 - r20) >> 3) + 0x80];
+    dst[1] = clipTable[((r31 - r22      ) >> 3) + 0x80];
+    dst[2] = clipTable[((r31 - r21      ) >> 3) + 0x80];
+    dst[3] = clipTable[((r31 + r28 - r19) >> 3) + 0x80];
+
+    dst += stride;
+
+    dst[0] = clipTable[((r31 - r28 - r17) >> 3) + 0x80];
+    dst[1] = clipTable[((r31 - r23      ) >> 3) + 0x80];
+    dst[2] = clipTable[((r31 - r24      ) >> 3) + 0x80];
+    dst[3] = clipTable[((r31 - r29 - r18) >> 3) + 0x80];
+
+    dst += stride;
+
+    dst[0] = clipTable[((r31 - r28 + r21) >> 3) + 0x80];
+    dst[1] = clipTable[((r31 - r28 + r17) >> 3) + 0x80];
+    dst[2] = clipTable[((r31 - r29 + r18) >> 3) + 0x80];
+    dst[3] = clipTable[((r31 - r29 + r22) >> 3) + 0x80];
 }
 
 typedef struct
@@ -244,12 +315,90 @@ typedef struct
 
 typedef struct
 {
-    uint32_t *ptr;  // 0-3
-    uint32_t buf_unk4;  // 4-7
-    uint32_t value; // 8-11
-    int32_t bit;    // 12-15
-    Tree *tree;     // 16-20
+    uint8_t const *ptr; // 0-3
+    uint32_t buf_unk4;   // 4-7
+    uint32_t value;      // 8-B
+    int32_t bit;         // C-F
 } BitBuffer;
+
+typedef struct
+{
+    BitBuffer buf; // 0-F
+    Tree *tree;    // 0x10-0x13
+} BitBufferWithTree;
+
+typedef struct
+{
+    // size: 0x38 (56)
+    // lots of little things in here
+    void *ptr0; // 0-3
+    void *ptr4; // 4-7
+    uint16_t h_blocks; // 8-9
+    uint16_t v_blocks; // A-B
+    uint16_t h_blocks_safe; // C-D
+    uint16_t v_blocks_safe; // E-F
+    // [...]
+    uint16_t width_in_samples; // 28-29
+    uint16_t height_in_samples; // 2A-2B
+    uint32_t size_in_samples; // 2C-2F
+    uint8_t width_shift; // 30
+    uint8_t height_shift; // 31
+    uint8_t h_samp_per_block; // 32
+    uint8_t v_samp_per_block; // 33
+    uint8_t block_size_in_samples; // 34
+} HVQPlaneDesc;
+
+typedef struct
+{
+    uint8_t yuvbuf[640*480*3]; // HACK
+    // size: 0x6CD8 (plane data comes right after)
+    HVQPlaneDesc planes[3]; // 0x00 - 0xA8
+    Tree trees[6];
+    BitBufferWithTree symbBuff[3];
+    BitBufferWithTree huffBuff[3];
+    BitBufferWithTree bufTree0[3];
+    BitBufferWithTree bufTree1[2];
+    BitBufferWithTree bufTree2[2];
+    BitBuffer buf0[3];
+    BitBufferWithTree bufTree3[2];
+    BitBufferWithTree bufTree4[2]; // 0x6234-0x625B
+    uint16_t h_nest_size;
+    uint16_t v_nest_size;
+    uint8_t isSquareOrLandscape;
+    uint8_t nest_data[70 * 38]; // 0x6261
+    uint32_t boundA; // 0x6CCC
+    uint32_t boundB; // 0x6CC8
+    uint8_t unk_shift; // 0x6CD0
+    uint8_t maybe_padding[7]; // 0x6CD1-0x6CD7
+} VideoState;
+
+typedef struct
+{
+    VideoState *state;
+    uint16_t width;
+    uint16_t height;
+    uint8_t h_samp;
+    uint8_t v_samp;
+} SeqObj;
+
+typedef struct
+{
+    uint16_t hres;
+    uint16_t vres;
+    uint8_t h_samp;
+    uint8_t v_samp;
+    uint8_t video_mode;
+} VideoInfo;
+
+static void OrgBlock(VideoState *state, uint8_t *dst, uint32_t stride, uint32_t bufIndex)
+{
+    uint8_t const **p = &state->buf0[bufIndex].ptr;
+    for (int i = 0; i < 4; ++i)
+    {
+        *(uint32_t*)(dst + i * stride) = read32(*p + i);
+        (*p) += 4;
+    }
+}
 
 static int16_t getBit(BitBuffer *buf)
 {
@@ -307,32 +456,32 @@ static int16_t _readTree(Tree *dst, BitBuffer *src)
     }
 }
 
-static void readTree(BitBuffer *buf, uint32_t isSigned, uint32_t scale)
+static void readTree(BitBufferWithTree *buf, uint32_t isSigned, uint32_t scale)
 {
     readTree_signed = isSigned;
     readTree_scale = scale;
     Tree *tree = buf->tree;
     tree->pos = 0x100;
-    if (buf->buf_unk4 == 0)
+    if (buf->buf.buf_unk4 == 0)
     {
         tree->tree_unk4 = 0;
     }
     else
     {
-        tree->tree_unk4 = _readTree(tree, buf);
+        tree->tree_unk4 = _readTree(tree, &buf->buf);
     }
 }
 
-static uint32_t decodeHuff(BitBuffer *buf)
+static uint32_t decodeHuff(BitBufferWithTree *buf)
 {
     Tree *tree = buf->tree;
     int32_t tree_unk4 = tree->tree_unk4;
     while (tree_unk4 >= 0x100)
-        tree_unk4 = tree->array0[(getBit(buf) << 9) + tree_unk4];
+        tree_unk4 = tree->array0[(getBit(&buf->buf) << 9) + tree_unk4];
     return tree->array0[tree_unk4];
 }
 
-static int32_t decodeSOvfSym(BitBuffer *buf, int32_t a, int32_t b)
+static int32_t decodeSOvfSym(BitBufferWithTree *buf, int32_t a, int32_t b)
 {
     int32_t sum = 0;
     int32_t value;
@@ -344,31 +493,20 @@ static int32_t decodeSOvfSym(BitBuffer *buf, int32_t a, int32_t b)
     return sum;
 }
 
-typedef struct
+static uint32_t GetAotBasis(VideoState *state, uint8_t *dst, void *unk_rw_buf, uint32_t unk4, uint32_t unk5, uint32_t bitBufIndex)
 {
-    BitBuffer bitBufs0[3]; // 0x60D8, unknown array size
-    BitBuffer bitBufs1[3]; // 0x6114, unknown array size
-    uint32_t boundA; // 0x6CCC
-    uint32_t boundB; // 0x6CC8
-} VideoState;
+    // state->buf0[bitBufIndex];
+    return 0;
+}
 
-typedef struct
+static uint32_t GetAotSum(VideoState *state, uint8_t const *src, uint8_t some_counter, uint32_t unk4, uint32_t unk5, uint32_t bitBufIndex)
 {
-    VideoState *state;
-    uint16_t width;
-    uint16_t height;
-    uint8_t h_samp;
-    uint8_t v_samp;
-} SeqObj;
-
-typedef struct
-{
-    uint16_t hres;
-    uint16_t vres;
-    uint8_t h_samp;
-    uint8_t v_samp;
-    uint8_t video_mode;
-} VideoInfo;
+    while (some_counter--)
+    {
+        // GetAotBasis(state, );
+    }
+    return 0;
+}
 
 static void HVQM4InitSeqObj(SeqObj *seqobj, VideoInfo *videoinfo)
 {
@@ -386,16 +524,116 @@ static uint32_t HVQM4BuffSize(SeqObj *seqobj)
     uint32_t hsamp = seqobj->h_samp == 2 ? hblocks / 2 : hblocks;
     uint32_t vsamp = seqobj->v_samp == 2 ? vblocks / 2 : vblocks;
     uint32_t samps = (hsamp + 2) * (vsamp + 2) * 2;
-    return (blocks + samps) * 2 + sizeof(VideoState);
+    uint32_t total = (blocks + samps) * 2;
+    return total + sizeof(VideoState);
+}
+
+static void setHVQPlaneDesc(SeqObj *seqobj, uint8_t plane_idx, uint8_t h_samp, uint8_t v_samp)
+{
+    HVQPlaneDesc *plane = &seqobj->state->planes[plane_idx];
+    plane->width_shift = h_samp == 2 ? 1 : 0;
+    plane->width_in_samples = seqobj->width >> plane->width_shift;
+    plane->height_shift = v_samp == 2 ? 1 : 0;
+    plane->height_in_samples = seqobj->height >> plane->height_shift;
+    plane->size_in_samples = plane->width_in_samples * plane->height_in_samples;
+    plane->h_samp_per_block = 2 >> plane->width_shift;
+    plane->v_samp_per_block = 2 >> plane->height_shift;
+    plane->block_size_in_samples = plane->h_samp_per_block * plane->v_samp_per_block;
+    plane->h_blocks = seqobj->width / (h_samp * 4);
+    plane->v_blocks = seqobj->height / (v_samp * 4);
+    plane->h_blocks_safe = plane->h_blocks + 2;
+    plane->v_blocks_safe = plane->v_blocks + 2;
+    // TODO: a bit more stuff i don't need yet
+}
+
+static void set_border(uint8_t *dst)
+{
+    dst[0] = 0x7F;
+    dst[1] = 0xFF;
+}
+
+static void HVQM4SetBuffer(SeqObj *seqobj, void *workbuff)
+{
+    VideoState *state = workbuff;
+    seqobj->state = state;
+    setHVQPlaneDesc(seqobj, 0, 1, 1);
+    setHVQPlaneDesc(seqobj, 1, seqobj->h_samp, seqobj->v_samp);
+    setHVQPlaneDesc(seqobj, 2, seqobj->h_samp, seqobj->v_samp);
+
+    state->isSquareOrLandscape = seqobj->width < seqobj->height;
+    if (state->isSquareOrLandscape)
+    {
+        state->h_nest_size = 70;
+        state->v_nest_size = 38;
+    }
+    else
+    {
+        state->h_nest_size = 38;
+        state->v_nest_size = 70;
+    }
+
+    state->bufTree1[0].tree = &state->trees[3];
+    state->bufTree1[1].tree = &state->trees[3];
+    state->bufTree2[0].tree = &state->trees[1];
+    state->bufTree2[1].tree = &state->trees[1];
+    state->symbBuff[0].tree = &state->trees[0];
+    state->symbBuff[1].tree = &state->trees[0];
+    state->symbBuff[2].tree = &state->trees[0];
+    state->huffBuff[0].tree = &state->trees[1]; // reuse!
+    state->huffBuff[1].tree = &state->trees[1]; //
+    state->huffBuff[2].tree = &state->trees[1]; //
+    state->bufTree0[0].tree = &state->trees[2];
+    state->bufTree0[1].tree = &state->trees[2];
+    state->bufTree0[2].tree = &state->trees[2];
+    state->bufTree3[0].tree = &state->trees[4];
+    state->bufTree3[1].tree = &state->trees[4];
+    state->bufTree4[0].tree = &state->trees[5];
+    state->bufTree4[1].tree = &state->trees[5];
+
+    void *plane_data = workbuff + sizeof(VideoState);
+    for (int i = 0; i < 3; ++i)
+    {
+        HVQPlaneDesc *plane = &state->planes[i];
+        plane->ptr0 = plane_data;
+        plane->ptr4 = plane_data + plane->h_blocks_safe*2 + 2;
+        plane_data += plane->h_blocks_safe * plane->v_blocks_safe * 2;
+
+        // set horizontal borders
+        void *ptr = plane->ptr0;
+        for (uint32_t i = plane->h_blocks_safe; i; --i)
+        {
+            set_border(ptr);
+            ptr += 2;
+        }
+        ptr = plane_data;
+        for (uint32_t i = plane->h_blocks_safe; i; --i)
+        {
+            ptr -= 2;
+            set_border(ptr);
+        }
+        // set vertical borders
+        ptr = plane->ptr0 + plane->h_blocks_safe * 2;
+        for (uint32_t i = plane->v_blocks_safe - 2; i; --i)
+        {
+            set_border(ptr);
+            ptr += plane->h_blocks_safe * 2;
+        }
+        ptr = plane->ptr0 + plane->h_blocks_safe * 4 - 2;
+        for (uint32_t i = plane->v_blocks_safe - 2; i; --i)
+        {
+            set_border(ptr);
+            ptr += plane->h_blocks_safe * 2;
+        }
+    }
 }
 
 static uint32_t getDeltaDC(VideoState *state, uint32_t buf_idx, uint32_t *ptr)
 {
     if (*ptr == 0)
     {
-        uint32_t symbol = decodeSOvfSym(&state->bitBufs0[buf_idx], state->boundA, state->boundB);
+        uint32_t symbol = decodeSOvfSym(&state->symbBuff[buf_idx], state->boundA, state->boundB);
         if (symbol == 0)
-            *ptr = decodeHuff(&state->bitBufs1[buf_idx]);
+            *ptr = decodeHuff(&state->huffBuff[buf_idx]);
         return symbol;
     }
     else
@@ -405,26 +643,346 @@ static uint32_t getDeltaDC(VideoState *state, uint32_t buf_idx, uint32_t *ptr)
     }
 }
 
-static void IpicDcvDec(VideoState *state)
+static void setCode(BitBuffer *dst, uint8_t const *src)
 {
-    for (int32_t i = 0; i < 3; ++i)
+    dst->buf_unk4 = read32(src);
+    dst->ptr = dst->buf_unk4 ? src + 4 : NULL;
+    dst->bit = -1;
+}
+
+static void Ipic_BasisNumDec(VideoState *state)
+{
+    uint8_t *y_dst = state->planes[0].ptr4;
+    uint32_t y_v_blocks = state->planes[0].v_blocks;
+    BitBufferWithTree *y_tree1 = &state->bufTree1[0];
+    BitBufferWithTree *y_tree2 = &state->bufTree2[0];
+    uint32_t value = 0;
+    while (y_v_blocks--)
     {
+        uint32_t y_h_blocks = state->planes[0].h_blocks;
+        while (y_h_blocks--)
+        {
+            if (value)
+            {
+                y_dst[1] = 0;
+                y_dst += 2;
+                --value;
+            }
+            else
+            {
+                int16_t x = decodeHuff(y_tree1) & 0xffff;
+                if (x == 0)
+                    value = decodeHuff(y_tree2);
+                y_dst[1] = x & 0xff;
+                y_dst += 2;
+            }
+        }
+        y_dst += 4;
+    }
+
+    uint8_t *u_dst = state->planes[1].ptr4;
+    uint8_t *v_dst = state->planes[2].ptr4;
+    uint32_t uv_v_blocks = state->planes[1].v_blocks;
+    BitBufferWithTree *uv_tree1 = &state->bufTree1[1];
+    BitBufferWithTree *uv_tree2 = &state->bufTree2[1];
+    value = 0;
+    while (uv_v_blocks--)
+    {
+        uint32_t uv_h_blocks = state->planes[1].h_blocks;
+        while (uv_h_blocks--)
+        {
+            if (value)
+            {
+                u_dst[1] = 0;
+                v_dst[1] = 0;
+                u_dst += 2;
+                v_dst += 2;
+                --value;
+            }
+            else
+            {
+                int16_t x = decodeHuff(uv_tree1) & 0xffff;
+                if (x == 0)
+                    value = decodeHuff(uv_tree2);
+                u_dst[1] = (x >> 0) & 0xf;
+                v_dst[1] = (x >> 4) & 0xf;
+                u_dst += 2;
+                v_dst += 2;
+            }
+        }
+        u_dst += 4;
+        v_dst += 4;
     }
 }
 
-static void HVQM4DecodeIpic(SeqObj *seqobj, uint8_t *frame)
+static void IpicDcvDec(VideoState *state)
+{
+    for (int plane_idx = 0; plane_idx < 3; ++plane_idx)
+    {
+        HVQPlaneDesc *plane = &state->planes[plane_idx];
+        uint32_t x = 0;
+        uint32_t v_blocks = plane->v_blocks;
+        uint8_t *ptr = plane->ptr4;
+        while (v_blocks--)
+        {
+            uint8_t *ptr2 = ptr - plane->h_blocks_safe * 2;
+            uint8_t y = ptr2[0];
+            uint32_t h_blocks = plane->h_blocks;
+            while (h_blocks--)
+            {
+                y += getDeltaDC(state, plane_idx, &x);
+                *ptr = y;
+                y = (ptr2[2] + y + 1) >> 1;
+                ptr += 2;
+            }
+            ptr += 4;
+        }
+    }
+}
+
+static void MakeNest(VideoState *state, uint16_t unk4, uint16_t unk5)
+{
+    printf("MakeNest()\n");
+    HVQPlaneDesc *y_plane = &state->planes[0];
+    uint8_t *ptr = y_plane->ptr4 + (y_plane->h_blocks_safe * unk5 + unk4) * 2;
+
+    uint32_t r19, r20;
+    int32_t r23, r24, r25, r26;
+
+    if (y_plane->h_blocks < state->h_nest_size)
+    {
+        r24 = y_plane->h_blocks;
+        r26 = state->h_nest_size - y_plane->h_blocks;
+        if (r26 > y_plane->h_blocks)
+            r26 = y_plane->h_blocks;
+        r20 = state->h_nest_size - (r24 + r26);
+    }
+    else
+    {
+        r24 = state->h_nest_size;
+        r20 = 0;
+        r26 = 0;
+    }
+
+    if (y_plane->v_blocks < state->v_nest_size)
+    {
+        r23 = y_plane->v_blocks;
+        r25 = state->v_nest_size - y_plane->v_blocks;
+        if (r25 > y_plane->v_blocks)
+            r25 = y_plane->v_blocks;
+        r19 = state->v_nest_size - (r23 + r25);
+    }
+    else
+    {
+        r23 = state->v_nest_size;
+        r19 = 0;
+        r25 = 0;
+    }
+
+    uint8_t *nest = state->nest_data;
+    for (int i = 0; i < r23; ++i)
+    {
+        uint8_t const *p = ptr;
+        for (int j = 0; j < r24; ++j)
+        {
+            *nest++ = (p[0] >> 4) & 0xF;
+            p += 2;
+        }
+        for (int j = 0; j < r26; ++j)
+        {
+            p -= 2;
+            *nest++ = (p[0] >> 4) & 0xF;
+        }
+        for (int j = 0; j < r20; ++j)
+            *nest++ = 0;
+        ptr += y_plane->h_blocks_safe;
+    }
+
+    uint8_t const *nest2 = nest - state->h_nest_size;
+    for (int i = 0; i < r25; ++i)
+    {
+        for (int j = 0; j < state->h_nest_size; ++j)
+            *nest++ = nest2[j];
+        nest2 -= state->h_nest_size;
+    }
+
+    for (int i = 0; i < r19; ++i)
+    {
+        for (int j = 0; j < state->h_nest_size; ++j)
+            *nest++ = 0;
+    }
+}
+
+typedef struct
+{
+    uint32_t plane_idx;
+    void *ptr4;
+    void *ptr8;
+    void *ptrC;
+    uint8_t unk10;
+    uint8_t unk11;
+    uint8_t unk12;
+    uint8_t unk13;
+    uint8_t unk14;
+} StackState;
+
+static void IntraAotBlock(VideoState *state, void *present, uint32_t stride, uint8_t unk6, uint8_t unk7, uint32_t plane_idx)
+{
+    printf("  IntraAotBlock()\n");
+    // TODO
+    exit(-1);
+}
+
+static void printStackState(StackState *s)
+{
+    printf("{plane=%u, %p,%p,%p, %u,%u,%u,%u, %u}",
+            s->plane_idx, s->ptr4, s->ptr8, s->ptrC,
+            s->unk10, s->unk11, s->unk12, s->unk13, s->unk14);
+}
+
+static void IpicBlockDec(VideoState *state, void *present, uint32_t stride, StackState *stack_state)
+{
+    printf(" IpicBlockDec(present=%p, stride=%u, ", present, stride);
+    printStackState(stack_state);
+    printf(")\n");
+    if (stack_state->unk13 == 0)
+    {
+        uint8_t const *ptr = stack_state->ptr4;
+        uint8_t r25 = ptr[1] & 0x77 ? stack_state->unk12 : ptr[0];
+        ptr = stack_state->ptrC;
+        uint8_t r24 = ptr[1] & 0x77 ? stack_state->unk12 : ptr[0];
+        uint8_t r23 = stack_state->unk11 & 0x77 ? stack_state->unk12 : stack_state->unk10;
+        WeightImBlock(present, stride, stack_state->unk12, r25, r24, stack_state->unk14, r23);
+        stack_state->unk14 = stack_state->unk12;
+    }
+    else if (stack_state->unk13 == 8)
+    {
+        dcBlock(present, stride, stack_state->unk12);
+        stack_state->unk14 = stack_state->unk12;
+    }
+    else
+    {
+        IntraAotBlock(state, present, stride, stack_state->unk12, stack_state->unk13, stack_state->plane_idx);
+        stack_state->unk14 = stack_state->unk10;
+    }
+    stack_state->ptr4 += 2;
+    stack_state->ptrC += 2;
+}
+
+static void IpicLineDec(VideoState *state, void *present, uint32_t stride, StackState *stack_state, uint16_t h_blocks)
+{
+    printf("IpicLineDec(present=%p, stride=%u, ", present, stride);
+    printStackState(stack_state);
+    printf(", h_blocks=%u)\n", h_blocks);
+    uint8_t *ptr = stack_state->ptr8;
+    stack_state->unk10 = ptr[0];
+    stack_state->unk11 = ptr[1];
+    stack_state->unk14 = ptr[0];
+
+    while (--h_blocks > 0)
+    {
+        stack_state->unk12 = stack_state->unk10;
+        stack_state->unk13 = stack_state->unk11;
+        stack_state->ptr8 += 2;
+        ptr = stack_state->ptr8;
+        stack_state->unk10 = ptr[0];
+        stack_state->unk11 = ptr[1];
+        IpicBlockDec(state, present, stride, stack_state);
+        present += 4;
+    }
+
+    stack_state->unk12 = stack_state->unk10;
+    stack_state->unk13 = stack_state->unk11;
+    stack_state->ptr8 += 6;
+    ptr = stack_state->ptr8;
+    stack_state->unk10 = ptr[0];
+    stack_state->unk11 = ptr[1];
+    IpicBlockDec(state, present, stride, stack_state);
+
+    stack_state->ptr4 += 4;
+    stack_state->ptrC += 4;
+}
+
+static void IpicPlaneDec(VideoState *state, int plane_idx, void *present)
+{
+    printf("IpicPlaneDec(plane=%u, present=%p)\n", plane_idx, present);
+    HVQPlaneDesc *plane = &state->planes[plane_idx];
+    StackState stack_state;
+    stack_state.plane_idx = plane_idx;
+    stack_state.ptr4 = plane->ptr4;
+    stack_state.ptr8 = plane->ptr4;
+    stack_state.ptrC = plane->ptr4 + plane->h_blocks_safe * 2;
+    int16_t v_blocks = plane->v_blocks;
+    if (v_blocks > 0)
+    {
+        IpicLineDec(state, present, plane->width_in_samples, &stack_state, plane->h_blocks);
+        present += plane->width_in_samples * 4;
+        --v_blocks;
+    }
+    stack_state.ptr4 = plane->ptr4;
+    while (v_blocks > 1)
+    {
+        IpicLineDec(state, present, plane->width_in_samples, &stack_state, plane->h_blocks);
+        present += plane->width_in_samples * 4;
+        --v_blocks;
+    }
+    if (v_blocks > 0)
+    {
+        stack_state.ptrC = stack_state.ptr8;
+        IpicLineDec(state, present, plane->width_in_samples, &stack_state, plane->h_blocks);
+    }
+}
+
+static void HVQM4DecodeIpic(SeqObj *seqobj, uint8_t const *frame, void *present)
+{
+    VideoState *state = seqobj->state;
+    uint8_t scale = frame[0];
+    uint16_t foo = read16(frame + 4);
+    uint16_t bar = read16(frame + 6);
+    uint8_t const *data = frame + 0x48;
+    frame += 8;
+    for (int i = 0; i < 2; ++i)
+    {
+        setCode(&state->bufTree1[i].buf, data + read32(frame)); frame += 4;
+        setCode(&state->bufTree2[i].buf, data + read32(frame)); frame += 4;
+    }
+    for (int i = 0; i < 3; ++i)
+    {
+        setCode(&state->symbBuff[i].buf, data + read32(frame)); frame += 4;
+        setCode(&state->bufTree0[i].buf, data + read32(frame)); frame += 4;
+        setCode(&state->buf0[i],         data + read32(frame)); frame += 4;
+    }
+    for (int i = 0; i < 3; ++i)
+    {
+        setCode(&state->huffBuff[i].buf, data + read32(frame)); frame += 4;
+    }
+    readTree(&state->bufTree1[0], 0, 0);
+    readTree(&state->bufTree2[0], 0, 0);
+    readTree(&state->symbBuff[0], 1, scale);
+    readTree(&state->bufTree0[0], 0, 2);
+
+    state->boundB = 0x007F << scale;
+    state->boundA = 0xFF80 << scale;
+
+    Ipic_BasisNumDec(state);
+    IpicDcvDec(state);
+    MakeNest(state, foo, bar);
+
+    for (int i = 0; i < 3; ++i)
+    {
+        IpicPlaneDec(state, i, present);
+        present += state->planes[i].size_in_samples;
+    }
+}
+
+static void HVQM4DecodeBpic(SeqObj *seqobj, uint8_t const *frame, void *present, void *past, void *future)
 {
     // TODO
 }
 
-static void HVQM4DecodeBpic(SeqObj *seqobj, uint8_t *frame)
+static void HVQM4DecodePpic(SeqObj *seqobj, uint8_t const *frame, void *present, void *past)
 {
-    // TODO
-}
-
-static void HVQM4DecodePpic(SeqObj *seqobj, uint8_t *frame)
-{
-    HVQM4DecodeBpic(seqobj, frame);
+    HVQM4DecodeBpic(seqobj, frame, present, past, past);
 }
 
 static void decode_video(SeqObj *seqobj, FILE *infile, uint16_t frame_type, uint32_t frame_size)
@@ -432,15 +990,29 @@ static void decode_video(SeqObj *seqobj, FILE *infile, uint16_t frame_type, uint
     uint32_t pos = ftell(infile);
     uint8_t *frame = malloc(frame_size);
     fread(frame, frame_size, 1, infile);
-    uint32_t frame_id = read32(frame); frame += 4;
+    for (uint32_t i = 0; i < frame_size; ++i)
+    {
+        if (i && i % 16 == 0)
+            puts("");
+        printf("%02X ", frame[i]);
+    }
+    puts("");
+    uint32_t frame_id = read32(frame);
     printf("video frame ID: %u\n", frame_id);
+    // HACK
+    void *present = seqobj->state->yuvbuf, *past = present, *future = present;
     switch (frame_type)
     {
-    case 0x10: puts("I frame"); HVQM4DecodeIpic(seqobj, frame); break;
-    case 0x20: puts("P frame"); HVQM4DecodePpic(seqobj, frame); break;
-    case 0x30: puts("B frame"); HVQM4DecodeBpic(seqobj, frame); break;
+    case 0x10: puts("I frame"); HVQM4DecodeIpic(seqobj, frame + 4, present);               break;
+    case 0x20: puts("P frame"); HVQM4DecodePpic(seqobj, frame + 4, present, past);         break;
+    case 0x30: puts("B frame"); HVQM4DecodeBpic(seqobj, frame + 4, present, past, future); break;
+    default:
+        fprintf(stderr, "unknown video frame type 0x%x\n", frame_type);
+        exit(EXIT_FAILURE);
     }
     fseek(infile, pos + frame_size, SEEK_SET);
+    free(frame);
+    puts("");
 }
 
 /* stream structure */
@@ -563,7 +1135,7 @@ void display_header(struct HVQM4_header *header)
     printf("Body size:   0x%"PRIx32"\n", header->body_size);
     printf("Duration:    %"PRIu32" (?)\n", header->duration);
     printf("Resolution:  %"PRIu32" x %"PRIu32"\n", header->hres, header->vres);
-    printf("µs/frame:       0x%"PRIu32"\n", header->usec_per_frame);
+    printf("µs/frame:    %"PRIu32"\n", header->usec_per_frame);
     printf("%d Blocks\n", header->blocks);
     printf("%d Video frames\n", header->video_frames);
     if (header->audio_frames)
@@ -688,6 +1260,7 @@ int main(int argc, char **argv)
 
     /* fill in the space that we'll put the header in later */
     uint8_t riff_header[0x2c];
+    memset(riff_header, 0, sizeof(riff_header));
     if (0x2c != fwrite(riff_header, 1, 0x2c, outfile))
     {
         fprintf(stderr, "error writing riff header\n");
@@ -696,6 +1269,8 @@ int main(int argc, char **argv)
 
     SeqObj seqobj;
     HVQM4InitSeqObj(&seqobj, (VideoInfo*)&header.hres);
+    VideoState *state = malloc(HVQM4BuffSize(&seqobj));
+    HVQM4SetBuffer(&seqobj, state);
 
     /* parse blocks */
     uint32_t block_count = 0;
@@ -738,11 +1313,7 @@ int main(int argc, char **argv)
             printf("size 0x%"PRIx32"\n", frame_size);
 #endif
 
-            if (frame_id1 == 1 && (
-                        (header.version == HVQM4_13 && frame_id2 == 0x10) ||
-                        (header.version == HVQM4_13 && frame_id2 == 0x30) ||
-                        (first_vid && frame_id2 == 0x10) ||
-                        (!first_vid && frame_id2 == 0x20)))
+            if (frame_id1 == 1)
             {
                 /* video */
                 first_vid = 0;
