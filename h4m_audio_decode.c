@@ -635,6 +635,36 @@ static void dumpYUV(SeqObj *seqobj, char const *path)
     fclose(f);
 }
 
+// HACK: assumes 4:2:0, assumes JPEG color space
+static uint8_t clamp255(float f)
+{
+    return f < 0 ? 0 : f > 255 ? 255 : (uint8_t)f;
+}
+static void dumpRGB(SeqObj *seqobj, char const *path)
+{
+    FILE *f = fopen(path, "wb+");
+    uint32_t w = seqobj->width, h = seqobj->height;
+    fprintf(f, "P3\n%u %u\n255\n", w, h);
+    uint8_t const *yp = seqobj->state->yuvbuf;
+    uint8_t const *up = yp + w*h;
+    uint8_t const *vp = up + w*h/4;
+    for (int i = 0; i < h; ++i)
+    {
+        for (int j = 0; j < w; ++j)
+        {
+            float y = yp[i   * w   + j];
+            float u = up[i/2 * w/2 + j/2];
+            float v = vp[i/2 * w/2 + j/2];
+            uint8_t r = clamp255(y + 1.402*(v - 128));
+            uint8_t g = clamp255(y - 0.34414*(u - 128) - 0.71414*(v - 128));
+            uint8_t b = clamp255(y + 1.772*(u - 128));
+            fprintf(f, "%u %u %u ", r, g, b);
+        }
+        fputs("\n", f);
+    }
+    fclose(f);
+}
+
 static void dumpPlanes(VideoState *state, char const *prefix)
 {
     printf("dumping %s\n", prefix);
@@ -865,7 +895,7 @@ static void IpicDcvDec(VideoState *state)
             // skip adjacent vertical borders
             ptr += 2 * sizeof(uint16_t);
         }
-        dumpPlanes(state, "filled");
+        //dumpPlanes(state, "filled");
     }
 }
 
@@ -1187,7 +1217,7 @@ static void decode_video(SeqObj *seqobj, FILE *infile, uint16_t frame_type, uint
         static int i = 0; // HACK
         sprintf(name, "video_frame_%02u.ppm", i++);
         printf("got an I frame! writing it to %s now...\n", name);
-        dumpYUV(seqobj, name);
+        dumpRGB(seqobj, name);
     }
 }
 
