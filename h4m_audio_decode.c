@@ -496,14 +496,60 @@ static int32_t decodeSOvfSym(BitBufferWithTree *buf, int32_t a, int32_t b)
     return sum;
 }
 
-static uint32_t GetAotBasis(VideoState *state, uint8_t *dst, void *unk_rw_buf, uint32_t unk4, uint32_t unk5, uint32_t bitBufIndex)
+static uint32_t GetAotBasis(VideoState *state, uint8_t dst[4][4], int32_t *sum, uint8_t const *nest_data, uint32_t nest_stride, uint32_t plane_idx)
 {
-    // TODO
-    // state->buf0[bitBufIndex];
-    return 0;
+    BitBuffer *buf = &state->buf0[plane_idx];
+    uint16_t bits = read16(buf->ptr);
+    buf->ptr += 2;
+    uint32_t step, stride;
+    uint32_t big = bits & 0x3F;
+    uint32_t small = (bits >> 6) & 0x1F;
+    if (state->is_landscape)
+    {
+        nest_data += nest_stride * small + big;
+        step   =           1 << ((bits >> 11) & 1);
+        stride = nest_stride << ((bits >> 12) & 1);
+    }
+    else
+    {
+        nest_data += nest_stride * big + small;
+        step   =           1 << ((bits >> 12) & 1);
+        stride = nest_stride << ((bits >> 11) & 1);
+    }
+    //printf("bits=0x%04X, step=0x%02X, stride=0x%02X, nest_stride=0x%02X\n", bits, step, stride, nest_stride);
+    uint8_t min = *nest_data;
+    uint8_t max = *nest_data;
+    for (int i = 0; i < 4; ++i)
+    {
+        for (int j = 0; j < 4; ++j)
+        {
+            uint8_t nest_value = nest_data[i * stride + j * step];
+            dst[i][j] = nest_value;
+            min = nest_value < min ? nest_value : min;
+            max = nest_value > max ? nest_value : max;
+        }
+    }
+    *sum += decodeHuff(&state->bufTree0[plane_idx]);
+    int32_t inverse = divTable[max - min];
+    if (bits & 0x8000)
+        inverse = -inverse;
+    int32_t foo = (bits >> 13) & 3;
+    return (*sum + foo) * inverse;
 }
 
-static uint32_t GetAotSum(VideoState *state, uint8_t const *src, uint8_t some_counter, uint32_t unk4, uint32_t unk5, uint32_t bitBufIndex)
+static int32_t GetAot1(VideoState *state, int32_t result[4][4], uint8_t const *nest_data, uint32_t nest_stride, uint32_t plane_idx)
+{
+    uint8_t byte_result[4][4];
+    int32_t dummy = 0;
+    uint32_t factor = GetAotBasis(state, byte_result, &dummy, nest_data, nest_stride, plane_idx);
+    int32_t sum = 0;
+    for (int i = 0; i < 4; ++i)
+        for (int j = 0; j < 4; ++j)
+            sum += result[i][j] = factor * byte_result[i][j];
+    return sum >> 4;
+}
+
+static int32_t GetAotSum(VideoState *state, int32_t result[4][4], uint8_t some_counter, uint8_t const *nest_data, uint32_t nest_stride, uint32_t plane_idx)
 {
     // TODO
     while (some_counter--)
@@ -897,11 +943,47 @@ typedef struct
     uint8_t unk14;
 } StackState;
 
-static void IntraAotBlock(VideoState *state, void *present, uint32_t stride, uint8_t unk6, uint8_t unk7, uint32_t plane_idx)
+static void IntraAotBlock(VideoState *state, uint8_t *dst, uint32_t stride, uint8_t unk6, uint8_t block_type, uint32_t plane_idx)
 {
-    printf("  IntraAotBlock()\n");
-    // TODO
-    exit(-1);
+    printf("  IntraAotBlock(unk6=%u, block_type=%u)\n", unk6, block_type);
+    if (block_type == 6)
+    {
+        OrgBlock(state, dst, stride, plane_idx);
+        return;
+    }
+#if 1
+    for (int i = 0; i < 70*38; ++i)
+    {
+        printf("%02X ", state->nest_data[i]);
+        if (i % 16 == 15)
+            puts("");
+    }
+    fflush(stdout);
+#endif
+    int32_t r30 = unk6 << state->unk_shift;
+    printf("r30: 0x%08X\n", r30); // 0x6400
+    int32_t result[4][4];
+    if (block_type == 1)
+        r30 -= GetAot1(state, result, state->nest_data, state->h_nest_size, plane_idx);
+    else
+        r30 -= GetAotSum(state, result, block_type, state->nest_data, state->h_nest_size, plane_idx);
+#if 1
+    printf("r30: 0x%08X\n", r30); // 0x6400 - 0x3A00 => 0x2A00, not 0xFFFCC400
+    for (int i = 0; i < 4; ++i)
+        for (int j = 0; j < 4; ++j)
+        {
+            printf("result[%u][%u]: 0x%08X\n", i, j, result[i][j]);
+        }
+#endif
+    for (int i = 0; i < 4; ++i)
+    {
+        for (int j = 0; j < 4; ++j)
+        {
+            uint32_t address = ((result[i][j] + r30) >> state->unk_shift);
+            uint8_t byte = clipTable[address + 0x80];
+            dst[i * stride + j] = byte;
+        }
+    }
 }
 
 static void printStackState(StackState *s)
