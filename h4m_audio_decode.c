@@ -549,14 +549,25 @@ static int32_t GetAot1(VideoState *state, int32_t result[4][4], uint8_t const *n
     return sum >> 4;
 }
 
-static int32_t GetAotSum(VideoState *state, int32_t result[4][4], uint8_t some_counter, uint8_t const *nest_data, uint32_t nest_stride, uint32_t plane_idx)
+static int32_t GetAotSum(VideoState *state, int32_t result[4][4], uint8_t count, uint8_t const *nest_data, uint32_t nest_stride, uint32_t plane_idx)
 {
-    // TODO
-    while (some_counter--)
+    for (int i = 0; i < 4; ++i)
+        for (int j = 0; j < 4; ++j)
+            result[i][j] = 0;
+    uint8_t byte_result[4][4];
+    int32_t temp = 0;
+    for (int k = 0; k < count; ++k)
     {
-        // GetAotBasis(state, );
+        uint32_t factor = GetAotBasis(state, byte_result, &temp, nest_data, nest_stride, plane_idx);
+        for (int i = 0; i < 4; ++i)
+            for (int j = 0; j < 4; ++j)
+                result[i][j] += factor * byte_result[i][j];
     }
-    return 0;
+    int32_t sum = 0;
+    for (int i = 0; i < 4; ++i)
+        for (int j = 0; j < 4; ++j)
+            sum += result[i][j];
+    return sum >> 4;
 }
 
 static void HVQM4InitSeqObj(SeqObj *seqobj, VideoInfo *videoinfo)
@@ -951,7 +962,7 @@ static void IntraAotBlock(VideoState *state, uint8_t *dst, uint32_t stride, uint
         OrgBlock(state, dst, stride, plane_idx);
         return;
     }
-#if 1
+#if 0
     for (int i = 0; i < 70*38; ++i)
     {
         printf("%02X ", state->nest_data[i]);
@@ -967,7 +978,7 @@ static void IntraAotBlock(VideoState *state, uint8_t *dst, uint32_t stride, uint
         r30 -= GetAot1(state, result, state->nest_data, state->h_nest_size, plane_idx);
     else
         r30 -= GetAotSum(state, result, block_type, state->nest_data, state->h_nest_size, plane_idx);
-#if 1
+#if 0
     printf("r30: 0x%08X\n", r30); // 0x6400 - 0x3A00 => 0x2A00, not 0xFFFCC400
     for (int i = 0; i < 4; ++i)
         for (int j = 0; j < 4; ++j)
