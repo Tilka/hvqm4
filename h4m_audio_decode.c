@@ -246,7 +246,7 @@ void HVQM4InitDecoder()
 // done
 static void dcBlock(uint8_t *dst, uint32_t stride, uint8_t value)
 {
-    printf("  dcBlock()\n");
+    //printf("  dcBlock()\n");
     for (int i = 0; i < 4; ++i)
     {
         dst[0] = value;
@@ -394,14 +394,14 @@ typedef struct
     uint8_t video_mode;
 } VideoInfo;
 
-static void OrgBlock(VideoState *state, uint8_t *dst, uint32_t stride, uint32_t bufIndex)
+static void OrgBlock(VideoState *state, uint8_t *dst, uint32_t stride, uint32_t plane_idx)
 {
     printf("OrgBlock\n");
-    void const **p = &state->buf0[bufIndex].ptr;
+    BitBuffer *buf = &state->buf0[plane_idx];
     for (int i = 0; i < 4; ++i)
     {
-        *(uint32_t*)(dst + i * stride) = read32(*p + i);
-        (*p) += 4;
+        *(uint32_t*)(dst + i * stride) = read32(buf->ptr);
+        buf->ptr += 4;
     }
 }
 
@@ -895,8 +895,8 @@ static void IpicDcvDec(VideoState *state)
             // skip adjacent vertical borders
             ptr += 2 * sizeof(uint16_t);
         }
-        //dumpPlanes(state, "filled");
     }
+    //dumpPlanes(state, "filled");
 }
 
 static void MakeNest(VideoState *state, uint16_t unk4, uint16_t unk5)
@@ -986,7 +986,7 @@ typedef struct
 
 static void IntraAotBlock(VideoState *state, uint8_t *dst, uint32_t stride, uint8_t unk6, uint8_t block_type, uint32_t plane_idx)
 {
-    printf("  IntraAotBlock(unk6=%u, block_type=%u)\n", unk6, block_type);
+    //printf("  IntraAotBlock(unk6=%u, block_type=%u)\n", unk6, block_type);
     if (block_type == 6)
     {
         OrgBlock(state, dst, stride, plane_idx);
@@ -1002,7 +1002,7 @@ static void IntraAotBlock(VideoState *state, uint8_t *dst, uint32_t stride, uint
     fflush(stdout);
 #endif
     int32_t r30 = unk6 << state->unk_shift;
-    printf("r30: 0x%08X\n", r30); // 0x6400
+    //printf("r30: 0x%08X\n", r30); // 0x6400
     int32_t result[4][4];
     if (block_type == 1)
         r30 -= GetAot1(state, result, state->nest_data, state->h_nest_size, plane_idx);
