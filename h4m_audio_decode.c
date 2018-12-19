@@ -399,10 +399,8 @@ static void OrgBlock(VideoState *state, uint8_t *dst, uint32_t stride, uint32_t 
     printf("OrgBlock\n");
     BitBuffer *buf = &state->buf0[plane_idx];
     for (int i = 0; i < 4; ++i)
-    {
-        *(uint32_t*)(dst + i * stride) = read32(buf->ptr);
-        buf->ptr += 4;
-    }
+        for (int j = 0; j < 4; ++j)
+            dst[i * stride + j] = *(uint8_t*)buf->ptr++;
 }
 
 static int16_t getBit(BitBuffer *buf)
@@ -1198,6 +1196,7 @@ static void decode_video(SeqObj *seqobj, FILE *infile, uint16_t frame_type, uint
     printf("display order within GOP: %u\n", frame_id);
     // HACK
     void *present = seqobj->state->yuvbuf, *past = present, *future = present;
+    memset(present, 0, 640*480*3);
     switch (frame_type)
     {
     case 0x10: puts("I frame"); HVQM4DecodeIpic(seqobj, frame + 4, present);               break;
