@@ -488,6 +488,18 @@ static int32_t decodeSOvfSym(BitBufferWithTree *buf, int32_t a, int32_t b)
     return sum;
 }
 
+static int32_t decodeUOvfSym(BitBufferWithTree *buf, int32_t cmp_value)
+{
+    int32_t sum = 0;
+    int32_t value;
+    do
+    {
+        value = decodeHuff(buf);
+        sum += value;
+    } while (value >= cmp_value);
+    return sum;
+}
+
 static uint32_t GetAotBasis(VideoState *state, uint8_t dst[4][4], int32_t *sum, uint8_t const *nest_data, uint32_t nest_stride, uint32_t plane_idx)
 {
     BitBuffer *buf = &state->buf0[plane_idx];
@@ -1130,7 +1142,7 @@ static void HVQM4DecodeBpic(SeqObj *seqobj, uint8_t const *frame, void *present,
 
 static void HVQM4DecodePpic(SeqObj *seqobj, uint8_t const *frame, void *present, void *past)
 {
-    HVQM4DecodeBpic(seqobj, frame, present, past, past);
+    HVQM4DecodeBpic(seqobj, frame, present, past, present);
 }
 
 static void decode_video(SeqObj *seqobj, FILE *infile, uint16_t frame_type, uint32_t frame_size)
