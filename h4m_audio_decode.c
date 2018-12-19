@@ -330,8 +330,8 @@ typedef struct
 {
     // size: 0x38 (56)
     // lots of little things in here
-    void *ptr0; // 0-3 beginning of the plane including the border
-    void *ptr4; // 4-7 beginning of the non-border plane
+    void *border; // 0-3 beginning of the plane including the border
+    void *payload; // 4-7 beginning of the non-border plane data
     uint16_t h_blocks; // 8-9
     uint16_t v_blocks; // A-B
     uint16_t h_blocks_safe; // C-D
@@ -676,7 +676,7 @@ static void dumpPlanes(VideoState *state, char const *prefix)
         FILE *f = fopen(path, "wb+");
         HVQPlaneDesc *plane = &state->planes[plane_idx];
         fprintf(f, "P2\n%u %u\n255\n", plane->h_blocks_safe, plane->v_blocks_safe);
-        uint8_t const *p = plane->ptr0;
+        uint8_t const *p = plane->border;
         for (int i = 0; i < plane->v_blocks_safe; ++i)
         {
             for (int j = 0; j < plane->h_blocks_safe; ++j)
@@ -744,12 +744,13 @@ static void HVQM4SetBuffer(SeqObj *seqobj, void *workbuff)
     for (int i = 0; i < 3; ++i)
     {
         HVQPlaneDesc *plane = &state->planes[i];
-        plane->ptr0 = plane_data;
-        plane->ptr4 = plane_data + plane->h_blocks_safe * sizeof(uint16_t) + 2;
+        plane->border = plane_data;
+        uint32_t stride = plane->h_blocks_safe * sizeof(uint16_t);
+        plane->payload = plane_data + stride + 2;
         plane_data += plane->h_blocks_safe * plane->v_blocks_safe * sizeof(uint16_t);
 
         // set horizontal borders
-        void *ptr = plane->ptr0;
+        void *ptr = plane->border;
         for (uint32_t i = plane->h_blocks_safe; i; --i)
         {
             set_border(ptr);
@@ -764,18 +765,18 @@ static void HVQM4SetBuffer(SeqObj *seqobj, void *workbuff)
         }
 
         // set vertical borders
-        ptr = plane->ptr0 + plane->h_blocks_safe * sizeof(uint16_t);
+        ptr = plane->border + stride;
         for (uint32_t i = plane->v_blocks_safe - 2; i; --i)
         {
             set_border(ptr);
-            ptr += plane->h_blocks_safe * sizeof(uint16_t);
+            ptr += stride;
         }
 
-        ptr = plane->ptr0 + plane->h_blocks_safe * sizeof(uint16_t) * 2 - sizeof(uint16_t);
+        ptr = plane->border + stride * 2 - sizeof(uint16_t);
         for (uint32_t i = plane->v_blocks_safe - 2; i; --i)
         {
             set_border(ptr);
-            ptr += plane->h_blocks_safe * sizeof(uint16_t);
+            ptr += stride;
         }
     }
 }
@@ -805,7 +806,7 @@ static void setCode(BitBuffer *dst, void const *src)
 
 static void Ipic_BasisNumDec(VideoState *state)
 {
-    uint8_t *y_dst = state->planes[0].ptr4;
+    uint8_t *y_dst = state->planes[0].payload;
     uint32_t y_v_blocks = state->planes[0].v_blocks;
     BitBufferWithTree *y_tree1 = &state->bufTree1[0];
     BitBufferWithTree *y_tree2 = &state->bufTree2[0];
@@ -833,8 +834,8 @@ static void Ipic_BasisNumDec(VideoState *state)
         y_dst += 4;
     }
 
-    uint8_t *u_dst = state->planes[1].ptr4;
-    uint8_t *v_dst = state->planes[2].ptr4;
+    uint8_t *u_dst = state->planes[1].payload;
+    uint8_t *v_dst = state->planes[2].payload;
     uint32_t uv_v_blocks = state->planes[1].v_blocks;
     BitBufferWithTree *uv_tree1 = &state->bufTree1[1];
     BitBufferWithTree *uv_tree2 = &state->bufTree2[1];
@@ -875,7 +876,7 @@ static void IpicDcvDec(VideoState *state)
         HVQPlaneDesc *plane = &state->planes[plane_idx];
         uint32_t x = 0;
         uint32_t v_blocks = plane->v_blocks;
-        uint8_t *ptr = plane->ptr4;
+        uint8_t *ptr = plane->payload;
         while (v_blocks--)
         {
             uint8_t const *ptr2 = ptr - plane->h_blocks_safe * 2;
@@ -900,7 +901,7 @@ static void IpicDcvDec(VideoState *state)
 static void MakeNest(VideoState *state, uint16_t unk4, uint16_t unk5)
 {
     HVQPlaneDesc *y_plane = &state->planes[0];
-    uint8_t *ptr = y_plane->ptr4 + (y_plane->h_blocks_safe * unk5 + unk4) * 2;
+    uint8_t *ptr = y_plane->payload + (y_plane->h_blocks_safe * unk5 + unk4) * 2;
 
     uint32_t r19, r20;
     int32_t r23, r24, r25, r26;
@@ -978,7 +979,7 @@ typedef struct
     uint8_t unk10;
     uint8_t unk11;
     uint8_t unk12;
-    uint8_t unk13;
+    uint8_t block_type;
     uint8_t unk14;
 } StackState;
 
@@ -1008,7 +1009,7 @@ static void IntraAotBlock(VideoState *state, uint8_t *dst, uint32_t stride, uint
 
 static void IpicBlockDec(VideoState *state, void *present, uint32_t stride, StackState *stack_state)
 {
-    if (stack_state->unk13 == 0)
+    if (stack_state->block_type == 0)
     {
         uint8_t const *ptr = stack_state->ptr4;
         uint8_t r25 = ptr[1] & 0x77 ? stack_state->unk12 : ptr[0];
@@ -1018,14 +1019,14 @@ static void IpicBlockDec(VideoState *state, void *present, uint32_t stride, Stac
         WeightImBlock(present, stride, stack_state->unk12, r25, r24, stack_state->unk14, r23);
         stack_state->unk14 = stack_state->unk12;
     }
-    else if (stack_state->unk13 == 8)
+    else if (stack_state->block_type == 8)
     {
         dcBlock(present, stride, stack_state->unk12);
         stack_state->unk14 = stack_state->unk12;
     }
     else
     {
-        IntraAotBlock(state, present, stride, stack_state->unk12, stack_state->unk13, stack_state->plane_idx);
+        IntraAotBlock(state, present, stride, stack_state->unk12, stack_state->block_type, stack_state->plane_idx);
         stack_state->unk14 = stack_state->unk10;
     }
     stack_state->ptr4 += 2;
@@ -1042,7 +1043,7 @@ static void IpicLineDec(VideoState *state, void *present, uint32_t stride, Stack
     while (--h_blocks > 0)
     {
         stack_state->unk12 = stack_state->unk10;
-        stack_state->unk13 = stack_state->unk11;
+        stack_state->block_type = stack_state->unk11;
         stack_state->ptr8 += 2;
         ptr = stack_state->ptr8;
         stack_state->unk10 = ptr[0];
@@ -1052,7 +1053,7 @@ static void IpicLineDec(VideoState *state, void *present, uint32_t stride, Stack
     }
 
     stack_state->unk12 = stack_state->unk10;
-    stack_state->unk13 = stack_state->unk11;
+    stack_state->block_type = stack_state->unk11;
     stack_state->ptr8 += 6;
     ptr = stack_state->ptr8;
     stack_state->unk10 = ptr[0];
@@ -1068,9 +1069,9 @@ static void IpicPlaneDec(VideoState *state, int plane_idx, void *present)
     HVQPlaneDesc *plane = &state->planes[plane_idx];
     StackState stack_state;
     stack_state.plane_idx = plane_idx;
-    stack_state.ptr4 = plane->ptr4;
-    stack_state.ptr8 = plane->ptr4;
-    stack_state.ptrC = plane->ptr4 + plane->h_blocks_safe * sizeof(uint16_t);
+    stack_state.ptr4 = plane->payload;
+    stack_state.ptr8 = plane->payload;
+    stack_state.ptrC = plane->payload + plane->h_blocks_safe * sizeof(uint16_t);
     int16_t v_blocks = plane->v_blocks;
     if (v_blocks > 0)
     {
@@ -1078,7 +1079,7 @@ static void IpicPlaneDec(VideoState *state, int plane_idx, void *present)
         present += plane->width_in_samples * 4;
         --v_blocks;
     }
-    stack_state.ptr4 = plane->ptr4;
+    stack_state.ptr4 = plane->payload;
     while (v_blocks > 1)
     {
         IpicLineDec(state, present, plane->width_in_samples, &stack_state, plane->h_blocks);
