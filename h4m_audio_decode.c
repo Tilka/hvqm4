@@ -243,10 +243,8 @@ void HVQM4InitDecoder()
     init_global_constants();
 }
 
-// done
 static void dcBlock(uint8_t *dst, uint32_t stride, uint8_t value)
 {
-    //printf("  dcBlock()\n");
     for (int i = 0; i < 4; ++i)
     {
         dst[0] = value;
@@ -329,7 +327,6 @@ typedef struct
 typedef struct
 {
     // size: 0x38 (56)
-    // lots of little things in here
     void *border; // 0-3 beginning of the plane including the border
     void *payload; // 4-7 beginning of the non-border plane data
     uint16_t h_blocks; // 8-9
@@ -484,7 +481,7 @@ static int32_t decodeSOvfSym(BitBufferWithTree *buf, int32_t a, int32_t b)
     {
         value = decodeHuff(buf);
         sum += value;
-    } while (a >= value && value >= b);
+    } while (a >= value || value >= b);
     return sum;
 }
 
@@ -879,23 +876,24 @@ static void IpicDcvDec(VideoState *state)
         uint8_t *ptr = plane->payload;
         while (v_blocks--)
         {
-            uint8_t const *ptr2 = ptr - plane->h_blocks_safe * 2;
-            uint8_t y = ptr2[0];
+            // pointer to previous line
+            uint8_t const *ptr2 = ptr - plane->h_blocks_safe * sizeof(uint16_t);
+            uint32_t y = ptr2[0];
             uint32_t h_blocks = plane->h_blocks;
             while (h_blocks--)
             {
                 y += getDeltaDC(state, plane_idx, &x);
-                //printf("y=%u\n", y);
+                y &= 0xff;
                 *ptr = y;
                 y = (ptr2[2] + y + 1) >> 1;
-                ptr += 2;
-                ptr2 += 2;
+                ptr += sizeof(uint16_t);
+                ptr2 += sizeof(uint16_t);
             }
             // skip adjacent vertical borders
             ptr += 2 * sizeof(uint16_t);
         }
+        //dumpPlanes(state, "filled");
     }
-    //dumpPlanes(state, "filled");
 }
 
 static void MakeNest(VideoState *state, uint16_t unk4, uint16_t unk5)
@@ -1148,11 +1146,11 @@ static void HVQM4DecodePpic(SeqObj *seqobj, uint8_t const *frame, void *present,
 
 static void decode_video(SeqObj *seqobj, FILE *infile, uint16_t frame_type, uint32_t frame_size)
 {
-    uint32_t pos = ftell(infile);
     // getBit() and getByte() overread by up to 3 bytes
     uint8_t *frame = malloc(frame_size + 3);
     fread(frame, frame_size, 1, infile);
 #if 0
+    // print frame data
     for (uint32_t i = 0; i < frame_size; ++i)
     {
         printf("%02X ", frame[i]);
@@ -1175,7 +1173,6 @@ static void decode_video(SeqObj *seqobj, FILE *infile, uint16_t frame_type, uint
         fprintf(stderr, "unknown video frame type 0x%x\n", frame_type);
         exit(EXIT_FAILURE);
     }
-    fseek(infile, pos + frame_size, SEEK_SET);
     free(frame);
     puts("");
 
@@ -1183,7 +1180,9 @@ static void decode_video(SeqObj *seqobj, FILE *infile, uint16_t frame_type, uint
     {
         char name[50];
         static int i = 0; // HACK
-        sprintf(name, "video_frame_%02u.ppm", i++);
+        sprintf(name, "video_frame_yuv_%02u.ppm", i);
+        dumpYUV(seqobj, name);
+        sprintf(name, "video_frame_rgb_%02u.ppm", i++);
         printf("got an I frame! writing it to %s now...\n", name);
         dumpRGB(seqobj, name);
     }
@@ -1267,6 +1266,7 @@ static void load_header(struct HVQM4_header *header, uint8_t *raw_header)
         fprintf(stderr, "zero blocks\n");
         exit(EXIT_FAILURE);
     }
+#if 0
     if (header->audio_frames != 0)
     {
         if (header->audio_srate == 0 || header->audio_frame_sz == 0 || header->audio_channels == 0)
@@ -1275,6 +1275,7 @@ static void load_header(struct HVQM4_header *header, uint8_t *raw_header)
             exit(EXIT_FAILURE);
         }
     }
+#endif
     /* no check for video frame count */
     /*
     if (header->unk24 != 0x8257 && header->unk24 != 0x8256)
@@ -1461,7 +1462,8 @@ int main(int argc, char **argv)
         const uint32_t expected_block_size = get32(infile);
         const uint32_t expected_aud_frame_count = get32(infile);
         const uint32_t expected_vid_frame_count = get32(infile);
-        expect32(0x01000000, infile);   /* EOS marker? */
+        //expect32(0x01000000, infile);   /* EOS marker? */
+        get32(infile);   /* EOS marker? */
         const long data_start = ftell(infile);
 
         block_count ++;
@@ -1499,10 +1501,7 @@ int main(int argc, char **argv)
 #endif
                 decode_video(&seqobj, infile, frame_id2, frame_size);
             }
-            else if (frame_id1 == 0 &&
-                ((first_aud && ( frame_id2 == 3 || frame_id2 == 1)) ||
-                (!first_aud && frame_id2 == 2)))
-
+            else if (frame_id1 == 0)
             {
                 /* audio */
                 const long audio_started = ftell(infile);
@@ -1533,9 +1532,8 @@ int main(int argc, char **argv)
             }
             else
             {
-                fprintf(stderr, "unexpected frame id at %08lx\n", (unsigned long)ftell(infile));
+                fprintf(stderr, "unexpected frame id 0x%04X 0x%04X at %08lx\n", frame_id1, frame_id2, (unsigned long)(ftell(infile)-8));
                 exit(EXIT_FAILURE);
-                printf("unexpected frame id %d %d at %08lx\n", frame_id1, frame_id2, (unsigned long)(ftell(infile)-8));
                 seek_past(frame_size, infile);
             }
         }
