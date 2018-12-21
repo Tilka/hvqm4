@@ -365,7 +365,12 @@ typedef struct
     uint32_t boundA; // 0x6CCC
     uint32_t boundB; // 0x6CC8
     uint8_t unk_shift; // 0x6CD0
-    uint8_t maybe_padding[7]; // 0x6CD1-0x6CD7
+    uint8_t unk6CD1; // 0x6CD1
+    uint8_t unk6CD2; // 0x6CD2
+    uint8_t unk6CD3; // 0x6CD3
+    uint8_t unk6CD4; // 0x6CD4
+    uint8_t unk6CD5; // 0x6CD5
+    uint8_t maybe_padding[2]; // 0x6CD6-0x6CD7
 } VideoState;
 
 typedef struct
@@ -481,7 +486,7 @@ static int32_t decodeSOvfSym(BitBufferWithTree *buf, int32_t a, int32_t b)
     {
         value = decodeHuff(buf);
         sum += value;
-    } while (a >= value || value >= b);
+    } while (value <= a || value >= b);
     return sum;
 }
 
@@ -1091,6 +1096,45 @@ static void IpicPlaneDec(VideoState *state, int plane_idx, void *present)
     }
 }
 
+static void initMCHandler() {}
+static void spread_PB_descMap() {}
+static void resetMCHandler() {}
+static void setMCTop() {}
+static void MCBlockDecDCNest() {}
+static void setMCTarget() {}
+static void getMVector() {}
+static void MCBlockDecMCNest() {}
+static void MotionComp() {}
+static void setMCDownBlk() {}
+
+static void BpicPlaneDec(SeqObj *seqobj, void *present, void *past, void *future)
+{
+    initMCHandler();
+    spread_PB_descMap();
+    resetMCHandler();
+    for (int i = 0; i < seqobj->height; i += 8)
+    {
+        setMCTop();
+        for (int j = 0; j < seqobj->width; j += 8)
+        {
+            if (0)
+                MCBlockDecDCNest();
+            else
+            {
+                if (0)
+                    setMCTarget();
+                getMVector();
+                getMVector();
+                if (0)
+                    MCBlockDecMCNest();
+                else
+                    MotionComp();
+            }
+        }
+        setMCDownBlk();
+    }
+}
+
 static void HVQM4DecodeIpic(SeqObj *seqobj, uint8_t const *frame, void *present)
 {
     VideoState *state = seqobj->state;
@@ -1136,7 +1180,47 @@ static void HVQM4DecodeIpic(SeqObj *seqobj, uint8_t const *frame, void *present)
 
 static void HVQM4DecodeBpic(SeqObj *seqobj, uint8_t const *frame, void *present, void *past, void *future)
 {
-    // TODO
+    VideoState *state = seqobj->state;
+    state->unk_shift = frame[1];
+    state->unk6CD1 = frame[0];
+    state->unk6CD2 = frame[2];
+    state->unk6CD4 = frame[3];
+    state->unk6CD3 = frame[4];
+    state->unk6CD5 = frame[5];
+    uint16_t foo = read16(frame + 4);
+    uint16_t bar = read16(frame + 6);
+    uint8_t const *data = frame + 0x4C;
+    frame += 8;
+    for (int i = 0; i < 2; ++i)
+    {
+        setCode(&state->bufTree1[i].buf, data + read32(frame)); frame += 4;
+        setCode(&state->bufTree2[i].buf, data + read32(frame)); frame += 4;
+    }
+    for (int i = 0; i < 3; ++i)
+    {
+        setCode(&state->symbBuff[i].buf, data + read32(frame)); frame += 4;
+        setCode(&state->bufTree0[i].buf, data + read32(frame)); frame += 4;
+        setCode(&state->buf0[i],         data + read32(frame)); frame += 4;
+    }
+    for (int i = 0; i < 2; ++i)
+    {
+        setCode(&state->bufTree3[i].buf, data + read32(frame)); frame += 4;
+    }
+    for (int i = 0; i < 2; ++i)
+    {
+        setCode(&state->bufTree4[1 - i].buf, data + read32(frame)); frame += 4;
+    }
+    readTree(&state->bufTree1[0], 0, 0);
+    readTree(&state->bufTree2[0], 0, 0);
+    readTree(&state->symbBuff[0], 1, state->unk6CD1);
+    readTree(&state->bufTree0[0], 0, 2);
+    readTree(&state->bufTree3[0], 1, 0);
+    readTree(&state->bufTree4[1], 0, 0);
+
+    state->boundB = +0x7F << state->unk6CD1;
+    state->boundA = -0x80 << state->unk6CD1;
+
+    BpicPlaneDec(seqobj, present, past, future);
 }
 
 static void HVQM4DecodePpic(SeqObj *seqobj, uint8_t const *frame, void *present, void *past)
