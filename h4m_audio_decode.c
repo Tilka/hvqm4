@@ -4,6 +4,9 @@
 #include <inttypes.h>
 #include <string.h>
 
+#define YOLO_INCLUDE
+#include "usermode/yoloader.c"
+
 /* .h4m (HVQM4 1.3/1.5) audio decoder 0.3 by hcs */
 
 //#define VERBOSE_PRINT
@@ -317,12 +320,14 @@ typedef struct
     uint32_t value;    // 8-B
     int32_t bit;       // C-F
 } BitBuffer;
+_Static_assert(sizeof(BitBuffer) == 0x10, "sizeof(BitBuffer) is incorrect");
 
 typedef struct
 {
     BitBuffer buf; // 0-F
     Tree *tree;    // 0x10-0x13
 } BitBufferWithTree;
+_Static_assert(sizeof(BitBufferWithTree) == 0x14, "sizeof(BitBufferWithTree) is incorrect");
 
 typedef struct
 {
@@ -343,7 +348,9 @@ typedef struct
     uint8_t h_samp_per_block; // 32
     uint8_t v_samp_per_block; // 33
     uint8_t block_size_in_samples; // 34
+    uint8_t padding[3]; // 35-37
 } HVQPlaneDesc;
+_Static_assert(sizeof(HVQPlaneDesc) == 0x38, "sizeof(HVQPlaneDesc) is incorrect");
 
 typedef struct
 {
@@ -370,6 +377,7 @@ typedef struct
     uint8_t unk6CD4[2]; // 0x6CD4
     uint8_t maybe_padding[2]; // 0x6CD6-0x6CD7
 } VideoState;
+_Static_assert(sizeof(VideoState) == 0x6CD8, "sizeof(VideoState) is incorrect");
 
 typedef struct
 {
@@ -378,12 +386,16 @@ typedef struct
     uint16_t height;
     uint8_t h_samp;
     uint8_t v_samp;
+    uint16_t unkA; // unused?
+} SeqObj;
 
-    // technically, this belongs in the player object
+typedef struct
+{
+    SeqObj seqobj;
     void *past;
     void *present;
     void *future;
-} SeqObj;
+} Player;
 
 typedef struct
 {
@@ -627,18 +639,19 @@ static void setHVQPlaneDesc(SeqObj *seqobj, uint8_t plane_idx, uint8_t h_samp, u
 }
 
 // HACK: assumes 4:2:0
-static void dumpYUV(SeqObj *seqobj, char const *path)
+static void dumpYUV(Player *player, char const *path)
 {
     FILE *f = fopen(path, "wb+");
-    fprintf(f, "P5\n%u %u\n255\n", seqobj->width, seqobj->height * 2);
-    uint8_t const *p = seqobj->present;
+    uint32_t w = player->seqobj.width, h = player->seqobj.height;
+    fprintf(f, "P5\n%u %u\n255\n", w, h * 2);
+    uint8_t const *p = player->present;
     for (int plane = 0; plane < 2; ++plane)
     {
-        for (int i = 0; i < seqobj->height; ++i)
+        for (int i = 0; i < h; ++i)
         {
-            for (int j = 0; j < seqobj->width; ++j)
+            for (int j = 0; j < w; ++j)
             {
-                if (plane == 0 || j < seqobj->width / 2)
+                if (plane == 0 || j < w / 2)
                     fputc(*p++, f);
                 else
                     fputc(0, f);
@@ -653,12 +666,12 @@ static uint8_t clamp255(float f)
 {
     return f < 0 ? 0 : f > 255 ? 255 : (uint8_t)f;
 }
-static void dumpRGB(SeqObj *seqobj, char const *path)
+static void dumpRGB(Player *player, char const *path)
 {
     FILE *f = fopen(path, "wb+");
-    uint32_t w = seqobj->width, h = seqobj->height;
+    uint32_t w = player->seqobj.width, h = player->seqobj.height;
     fprintf(f, "P6\n%u %u\n255\n", w, h);
-    uint8_t const *yp = seqobj->present;
+    uint8_t const *yp = player->present;
     uint8_t const *up = yp + w*h;
     uint8_t const *vp = up + w*h/4;
     for (int i = 0; i < h; ++i)
@@ -1640,7 +1653,7 @@ enum FrameType
     B_FRAME = 0x30,
 };
 
-static void decode_video(SeqObj *seqobj, FILE *infile, uint16_t frame_type, uint32_t frame_size)
+static void decode_video(Player *player, FILE *infile, uint16_t frame_type, uint32_t frame_size)
 {
     // getBit() and getByte() overread by up to 3 bytes
     uint32_t overread = 3;
@@ -1650,21 +1663,20 @@ static void decode_video(SeqObj *seqobj, FILE *infile, uint16_t frame_type, uint
     uint32_t disp_id = read32(frame);
     printf("display order within GOP: %u\n", disp_id);
 
-    //memset(seqobj->present, 0, 640*480*3);
-
     // swap past and future
     if (frame_type != B_FRAME)
     {
-        void *tmp = seqobj->past;
-        seqobj->past = seqobj->future;
-        seqobj->future = tmp;
+        void *tmp = player->past;
+        player->past = player->future;
+        player->future = tmp;
     }
 
+    SeqObj *seqobj = &player->seqobj;
     switch (frame_type)
     {
-    case I_FRAME: puts("I frame"); HVQM4DecodeIpic(seqobj, frame + 4, seqobj->present);                               break;
-    case P_FRAME: puts("P frame"); HVQM4DecodePpic(seqobj, frame + 4, seqobj->present, seqobj->past);                 break;
-    case B_FRAME: puts("B frame"); HVQM4DecodeBpic(seqobj, frame + 4, seqobj->present, seqobj->past, seqobj->future); break;
+    case I_FRAME: puts("I frame"); pHVQM4DecodeIpic(seqobj, frame + 4, player->present);                               break;
+    case P_FRAME: puts("P frame"); pHVQM4DecodePpic(seqobj, frame + 4, player->present, player->past);                 break;
+    case B_FRAME: puts("B frame"); pHVQM4DecodeBpic(seqobj, frame + 4, player->present, player->past, player->future); break;
     default:
         fprintf(stderr, "unknown video frame type 0x%x\n", frame_type);
         exit(EXIT_FAILURE);
@@ -1673,23 +1685,23 @@ static void decode_video(SeqObj *seqobj, FILE *infile, uint16_t frame_type, uint
     puts("");
 
     // dump I frames
-    if (frame_type == I_FRAME)
+    //if (frame_type == I_FRAME)
     {
         char name[50];
         static int i = 0; // HACK
         sprintf(name, "video_frame_yuv_%02u.ppm", i);
-        dumpYUV(seqobj, name);
+        dumpYUV(player, name);
         sprintf(name, "video_frame_rgb_%02u.ppm", i++);
-        printf("got an I frame! writing it to %s now...\n", name);
-        dumpRGB(seqobj, name);
+        printf("writing frame to %s...\n", name);
+        dumpRGB(player, name);
     }
 
     // swap present and future
     if (frame_type != B_FRAME)
     {
-        void *tmp = seqobj->present;
-        seqobj->present = seqobj->future;
-        seqobj->future = tmp;
+        void *tmp = player->present;
+        player->present = player->future;
+        player->future = tmp;
     }
 }
 
@@ -1698,7 +1710,7 @@ static void decode_video(SeqObj *seqobj, FILE *infile, uint16_t frame_type, uint
 const char HVQM4_13_magic[16] = "HVQM4 1.3";
 const char HVQM4_15_magic[16] = "HVQM4 1.5";
 
-struct HVQM4_header
+typedef struct
 {
     enum
     {
@@ -1725,9 +1737,9 @@ struct HVQM4_header
     uint8_t  audio_bitdepth;/* 0x3D */
     uint16_t pad;           /* 0x3E-0x3F (0) */
     uint32_t audio_srate;   /* 0x40-0x43 */
-};
+} HVQM4_header;
 
-static void load_header(struct HVQM4_header *header, uint8_t *raw_header)
+static void load_header(HVQM4_header *header, uint8_t *raw_header)
 {
     /* check MAGIC */
     if (!memcmp(HVQM4_13_magic, &raw_header[0], 16))
@@ -1800,7 +1812,7 @@ static void load_header(struct HVQM4_header *header, uint8_t *raw_header)
     /* no check for srate, can be 0 */
 }
 
-static void display_header(struct HVQM4_header *header)
+static void display_header(HVQM4_header *header)
 {
     switch (header->version)
     {
@@ -1894,15 +1906,15 @@ static void make_wav_header(uint8_t * buf, int32_t sample_count, int32_t sample_
     put_32bitLE(buf+0x28, (int32_t)bytecount);
 }
 
-static void decv_init(SeqObj *seqobj)
+static void decv_init(Player *player)
 {
     // HACK
-    uint32_t res = seqobj->width * seqobj->height;
-    uint32_t sample_size = seqobj->h_samp * seqobj->v_samp;
+    uint32_t res = player->seqobj.width * player->seqobj.height;
+    uint32_t sample_size = player->seqobj.h_samp * player->seqobj.v_samp;
     uint32_t picsize = (res * (sample_size + 2)) / sample_size;
-    seqobj->past    = malloc(picsize);
-    seqobj->present = malloc(picsize);
-    seqobj->future  = malloc(picsize);
+    player->past    = malloc(picsize);
+    player->present = malloc(picsize);
+    player->future  = malloc(picsize);
 }
 
 int main(int argc, char **argv)
@@ -1931,7 +1943,7 @@ int main(int argc, char **argv)
     }
 
     /* load up and check header */
-    struct HVQM4_header header;
+    HVQM4_header header;
     load_header(&header, raw_header);
     display_header(&header);
 
@@ -1958,12 +1970,16 @@ int main(int argc, char **argv)
         exit(EXIT_FAILURE);
     }
 
-    SeqObj seqobj;
+    load_library("usermode/RM_DLL.elf");
+
     HVQM4InitDecoder();
-    HVQM4InitSeqObj(&seqobj, (VideoInfo*)&header.hres);
-    VideoState *state = malloc(HVQM4BuffSize(&seqobj));
-    HVQM4SetBuffer(&seqobj, state);
-    decv_init(&seqobj);
+    pHVQM4InitDecoder();
+
+    Player player;
+    pHVQM4InitSeqObj(&player.seqobj, (VideoInfo*)&header.hres);
+    VideoState *state = malloc(pHVQM4BuffSize(&player.seqobj));
+    pHVQM4SetBuffer(&player.seqobj, state);
+    decv_init(&player);
 
     /* parse blocks */
     uint32_t block_count = 0;
@@ -2016,7 +2032,7 @@ int main(int argc, char **argv)
 #ifdef VERBOSE_PRINT
                 printf("video frame %d/%d (%d)\n", (int)vid_frame_count, (int)expected_vid_frame_count, (int)total_vid_frames);
 #endif
-                decode_video(&seqobj, infile, frame_id2, frame_size);
+                decode_video(&player, infile, frame_id2, frame_size);
             }
             else if (frame_id1 == 0)
             {
@@ -2074,10 +2090,10 @@ int main(int argc, char **argv)
         total_sample_count += block_sample_count;
     }
 
-    free(seqobj.state);
-    free(seqobj.past);
-    free(seqobj.present);
-    free(seqobj.future);
+    free(player.seqobj.state);
+    free(player.past);
+    free(player.present);
+    free(player.future);
 
     if (total_aud_frames != header.audio_frames ||
         total_vid_frames != header.video_frames)
