@@ -781,16 +781,15 @@ static void dumpPlanes(VideoState *state, char const *prefix)
         snprintf(path, 128, "%s_%c.ppm", prefix, "yuv"[plane_idx]);
         FILE *f = fopen(path, "wb+");
         HVQPlaneDesc *plane = &state->planes[plane_idx];
-        fprintf(f, "P2\n%u %u\n255\n", plane->h_blocks_safe, plane->v_blocks_safe);
+        fprintf(f, "P5\n%u %u\n255\n", plane->h_blocks_safe, plane->v_blocks_safe);
         uint8_t const *p = plane->border;
         for (int i = 0; i < plane->v_blocks_safe; ++i)
         {
             for (int j = 0; j < plane->h_blocks_safe; ++j)
             {
-                fprintf(f, "%u ", *p++);
+                fputc(*p++, f);
                 ++p;
             }
-            fputs("\n", f);
         }
         fclose(f);
     }
