@@ -5,10 +5,10 @@
 #include <string.h>
 #include <stddef.h>
 
+#pragma pack(1)
+
 #define YOLO_INCLUDE
 #include "yoloader.c"
-
-#pragma pack(1)
 
 /* .h4m (HVQM4 1.3/1.5) audio decoder 0.3 by hcs */
 
@@ -1572,6 +1572,7 @@ static void spread_PB_descMap(SeqObj *seqobj, MCPlane mcplanes[3])
         }
         setMCDownBlk(mcplanes);
     }
+    dumpPlanes(state, "filled");
 }
 
 // done
@@ -1623,9 +1624,9 @@ static void MCBlockDecDCNest(VideoState *state, MCPlane mcplanes[3])
 }
 
 // done
-static void setMCTarget(MCPlane mcplanes[3], uint32_t unk4)
+static void setMCTarget(MCPlane mcplanes[3], uint32_t reference_frame)
 {
-    if (unk4 == 0)
+    if (reference_frame == 0)
     {
         mcplanes[0].target = mcplanes[0].past;
         mcplanes[1].target = mcplanes[1].past;
@@ -1720,6 +1721,7 @@ static void BpicPlaneDec(SeqObj *seqobj, void *present, void *past, void *future
             }
             else
             {
+                puts("bla");
                 --bla;
                 if (bla != r30)
                 {
@@ -1872,7 +1874,6 @@ static void decode_video(Player *player, FILE *infile, uint16_t frame_type, uint
         exit(EXIT_FAILURE);
     }
     free(frame);
-    puts("");
 
     //if (frame_type == I_FRAME)
     {
@@ -1892,6 +1893,8 @@ static void decode_video(Player *player, FILE *infile, uint16_t frame_type, uint
         player->present = player->future;
         player->future = tmp;
     }
+
+    puts("");
 }
 
 /* stream structure */

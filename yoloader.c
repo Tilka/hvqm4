@@ -147,6 +147,14 @@ void *yolo_sym(yolo_lib *lib, const char *symbol)
         return (void*)0x801B37E4;
     if (strcmp(symbol, "IpicBlockDec") == 0)
         return (void*)0x801B3680;
+    if (strcmp(symbol, "initMCHandler") == 0)
+        return (void*)0x801B39E0;
+    if (strcmp(symbol, "spread_PB_descMap") == 0)
+        return (void*)0x801B5854;
+    if (strcmp(symbol, "resetMCHandler") == 0)
+        return (void*)0x801B3AE0;
+    if (strcmp(symbol, "MotionComp") == 0)
+        return (void*)0x801B3B38;
     fputs("TODO\n", stderr);
     exit(1);
 }
@@ -171,6 +179,10 @@ void (*pPrediAotBlock)() = bla;
 void (*pIpicPlaneDec)() = bla;
 void (*pIpicLineDec)() = bla;
 void (*pIpicBlockDec)() = bla;
+void (*pinitMCHandler)() = bla;
+void (*pspread_PB_descMap)() = bla;
+void (*presetMCHandler)() = bla;
+void (*pMotionComp)() = bla;
 
 static void load_library(const char *lib_path)
 {
@@ -191,6 +203,10 @@ static void load_library(const char *lib_path)
     pIpicPlaneDec     = yolo_sym(&rm_dll, "IpicPlaneDec");
     pIpicLineDec      = yolo_sym(&rm_dll, "IpicLineDec");
     pIpicBlockDec     = yolo_sym(&rm_dll, "IpicBlockDec");
+    pinitMCHandler    = yolo_sym(&rm_dll, "initMCHandler");
+    pspread_PB_descMap = yolo_sym(&rm_dll, "spread_PB_descMap");
+    presetMCHandler   = yolo_sym(&rm_dll, "resetMCHandler");
+    pMotionComp       = yolo_sym(&rm_dll, "MotionComp");
 }
 
 #ifndef YOLO_INCLUDE
