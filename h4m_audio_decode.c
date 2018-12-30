@@ -1364,22 +1364,22 @@ static void initMCHandler(VideoState *state, MCPlane mcplanes[3], void *present,
 }
 
 // done
-static void initMCBproc(BitBufferWithTree *buftree, uint32_t *result)
+static void initMCBproc(BitBufferWithTree *buftree, uint32_t *proc)
 {
     if (buftree->buf.ptr)
     {
-        result[0] = getBit(&buftree->buf);
-        result[1] = decodeUOvfSym(buftree, 0xFF);
+        proc[0] = getBit(&buftree->buf);
+        proc[1] = decodeUOvfSym(buftree, 0xFF);
     }
 }
 
 // done
-static void initMCBtype(BitBufferWithTree *buftree, uint32_t *result)
+static void initMCBtype(BitBufferWithTree *buftree, uint32_t *type)
 {
     if (buftree->buf.ptr)
     {
-        result[0] = (getBit(&buftree->buf) << 1) | getBit(&buftree->buf);
-        result[1] = decodeUOvfSym(buftree, 0xFF);
+        type[0] = (getBit(&buftree->buf) << 1) | getBit(&buftree->buf);
+        type[1] = decodeUOvfSym(buftree, 0xFF);
     }
 }
 
@@ -1396,19 +1396,19 @@ static uint32_t mcbtypetrans[2][3] = {
 };
 
 // done
-static uint32_t getMCBtype(BitBufferWithTree *buftree, uint32_t *result)
+static uint32_t getMCBtype(BitBufferWithTree *buftree, uint32_t *type)
 {
-    if (result[1] == 0)
+    if (type[1] == 0)
     {
-        result[0] = mcbtypetrans[getBit(&buftree->buf)][result[0]];
-        result[1] = decodeUOvfSym(buftree, 0xFF);
+        type[0] = mcbtypetrans[getBit(&buftree->buf)][type[0]];
+        type[1] = decodeUOvfSym(buftree, 0xFF);
     }
-    --result[1];
-    return result[0];
+    --type[1];
+    return type[0];
 }
 
 // done
-static uint32_t getMBCproc(BitBufferWithTree *buftree, uint32_t *proc)
+static uint32_t getMCBproc(BitBufferWithTree *buftree, uint32_t *proc)
 {
     if (proc[1] == 0)
     {
@@ -1566,13 +1566,12 @@ static void spread_PB_descMap(SeqObj *seqobj, MCPlane mcplanes[3])
             else
             {
                 reset_PB_dc(mcplanes);
-                decode_PB_cc(state, mcplanes, getMBCproc(&state->bufTree4[0], proc), type[0]);
+                decode_PB_cc(state, mcplanes, getMCBproc(&state->bufTree4[0], proc), type[0]);
             }
             setMCNextBlk(mcplanes);
         }
         setMCDownBlk(mcplanes);
     }
-    dumpPlanes(state, "filled");
 }
 
 // done
