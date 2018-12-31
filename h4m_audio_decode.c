@@ -1660,7 +1660,7 @@ static void getMVector(int32_t *result, BitBufferWithTree *buf, int32_t unk5)
 static void MCBlockDecMCNest(VideoState *state, MCPlane mcplanes[3], int32_t x, int32_t y)
 {
     //printf("MCBlockDecMCNest(r5=0x%08X, r6=0x%08X)\n", x, y);
-    void *target = mcplanes[0].target + (y/2 - 16) * state->planes[0].width_in_samples + x/2 - 32;
+    void *target = mcplanes[0].target + x/2 + (y/2 - 16)*state->planes[0].width_in_samples - 32;
     for (int plane_idx = 0; plane_idx < 3; ++plane_idx)
     {
         MCPlane *mcplane = &mcplanes[plane_idx];
@@ -1679,7 +1679,7 @@ static void MCBlockDecMCNest(VideoState *state, MCPlane mcplanes[3], int32_t x, 
             {
                 int32_t foo = x >> plane->width_shift;
                 int32_t bar = y >> plane->height_shift;
-                void *r20 = mcplane->target + (bar >> 1) * plane->width_in_samples + (foo >> 1);
+                void *r20 = mcplane->target + (bar >> 1) * plane->width_in_samples + (foo >> 1) + plane->some_word_array[i];
                 if (r25 == 0)
                 {
                     p_MotionComp(r24, stride, r20, stride, foo & 1, bar & 1);
