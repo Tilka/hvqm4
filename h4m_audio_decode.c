@@ -617,6 +617,7 @@ static int32_t GetAot1(VideoState *state, int32_t result[4][4], uint8_t const *n
 
 static int32_t GetMCAot1(VideoState *state, int32_t result[4][4], uint8_t const *nest_data, uint32_t nest_stride, uint32_t plane_idx)
 {
+    //printf("GetMCAot1(nest_stride=%u, plane_idx=%u)\n", nest_stride, plane_idx);
     // only difference to GetAot1() is the call to GetMCAotBasis()
     uint8_t byte_result[4][4];
     int32_t dummy = 0;
@@ -652,6 +653,7 @@ static int32_t GetAotSum(VideoState *state, int32_t result[4][4], uint8_t count,
 // TODO: unverified
 static int32_t GetMCAotSum(VideoState *state, int32_t result[4][4], uint8_t count, uint8_t const *nest_data, uint32_t nest_stride, uint32_t plane_idx)
 {
+    //printf("GetMCAotSum(count=%u, nest_stride=%u, plane_idx=%u)\n", count, nest_stride, plane_idx);
     for (int i = 0; i < 4; ++i)
         for (int j = 0; j < 4; ++j)
             result[i][j] = 0;
@@ -1077,36 +1079,32 @@ static void MakeNest(VideoState *state, uint16_t unk4, uint16_t unk5)
 }
 
 // done
-static void _MotionComp_00(int8_t *dst, uint32_t dst_stride, int8_t const *src, uint32_t src_stride)
+static void _MotionComp_00(uint8_t *dst, uint32_t dst_stride, uint8_t const *src, uint32_t src_stride)
 {
-    //printf("_MotionComp_00()\n");
     for (int i = 0; i < 4; ++i)
         for (int j = 0; j < 4; ++j)
             dst[i * dst_stride + j] = src[i * src_stride + j];
 }
 
 // done
-static void _MotionComp_01(int8_t *dst, uint32_t dst_stride, int8_t const *src, uint32_t src_stride)
+static void _MotionComp_01(uint8_t *dst, uint32_t dst_stride, uint8_t const *src, uint32_t src_stride)
 {
-    //printf("_MotionComp_01()\n");
     for (int i = 0; i < 4; ++i)
         for (int j = 0; j < 4; ++j)
             dst[i * dst_stride + j] = (src[i * src_stride + j] + src[(i + 1) * src_stride + j] + 1) >> 1;
 }
 
 // done
-static void _MotionComp_10(int8_t *dst, uint32_t dst_stride, int8_t const *src, uint32_t src_stride)
+static void _MotionComp_10(uint8_t *dst, uint32_t dst_stride, uint8_t const *src, uint32_t src_stride)
 {
-    //printf("_MotionComp_10()\n");
     for (int i = 0; i < 4; ++i)
         for (int j = 0; j < 4; ++j)
             dst[i * dst_stride + j] = (src[i * src_stride + j] + src[i * src_stride + j + 1] + 1) >> 1;
 }
 
 // done
-static void _MotionComp_11(int8_t *dst, uint32_t dst_stride, int8_t const *src, uint32_t src_stride)
+static void _MotionComp_11(uint8_t *dst, uint32_t dst_stride, uint8_t const *src, uint32_t src_stride)
 {
-    //printf("_MotionComp_11()\n");
     for (int i = 0; i < 4; ++i)
         for (int j = 0; j < 4; ++j)
             dst[i * dst_stride + j] = (src[i * src_stride + j] + src[i * src_stride + j + 1] + src[(i + 1) * src_stride + j] + src[(i + 1) * src_stride + j + 1] + 2) >> 2;
@@ -1149,7 +1147,6 @@ _Static_assert(sizeof(MCPlane) == 0x34, "sizeof(MCPlane) is wrong");
 // done
 static void MotionComp(VideoState *state, MCPlane mcplanes[3], int32_t unk5, int32_t unk6)
 {
-    printf("MotionComp(r5=0x%08X, r6=0x%08X)\n", unk5, unk6);
     for (int i = 0; i < 3; ++i)
     {
         MCPlane *mcplane = &mcplanes[i];
@@ -1159,9 +1156,9 @@ static void MotionComp(VideoState *state, MCPlane mcplanes[3], int32_t unk5, int
         void *ptr = mcplane->target + (bar >> 1) * plane->width_in_samples + (foo >> 1);
         for (int j = 0; j < plane->block_size_in_samples; ++j)
         {
-            _MotionComp(mcplane->top + plane->some_word_array[i],
+            _MotionComp(mcplane->top + plane->some_word_array[j],
                         plane->width_in_samples,
-                        ptr + plane->some_word_array[i],
+                        ptr + plane->some_word_array[j],
                         plane->width_in_samples,
                         foo & 1, bar & 1);
         }
@@ -1208,7 +1205,7 @@ static void IntraAotBlock(VideoState *state, uint8_t *dst, uint32_t stride, uint
 static void PrediAotBlock(VideoState *state, uint8_t *dst, uint8_t const *src, uint32_t stride, uint8_t block_type,
                           uint8_t *nest_data, uint32_t h_nest_size, uint32_t plane_idx, uint32_t foo, uint32_t bar)
 {
-    printf("PrediAotBlock()\n");
+    //printf("PrediAotBlock(stride=%u, block_type=%u, h_nest_size=%u, plane_idx=%u, foo=%u, bar=%u)\n", stride, block_type, h_nest_size, plane_idx, foo, bar);
     int32_t result[4][4];
     --block_type;
     uint32_t r20;
@@ -1217,7 +1214,7 @@ static void PrediAotBlock(VideoState *state, uint8_t *dst, uint8_t const *src, u
     else
         r20 = GetMCAotSum(state, result, block_type, nest_data, h_nest_size, plane_idx);
 
-    int8_t mdst[4][4];
+    uint8_t mdst[4][4];
     uint32_t const dst_stride = 4;
     _MotionComp(mdst, dst_stride, src, stride, foo, bar);
     int32_t sum = 0;
@@ -1400,7 +1397,8 @@ static uint32_t getMCBtype(BitBufferWithTree *buftree, uint32_t *type)
 {
     if (type[1] == 0)
     {
-        type[0] = mcbtypetrans[getBit(&buftree->buf)][type[0]];
+        uint32_t bit = getBit(&buftree->buf);
+        type[0] = mcbtypetrans[bit][type[0]];
         type[1] = decodeUOvfSym(buftree, 0xFF);
     }
     --type[1];
@@ -1661,8 +1659,7 @@ static void getMVector(int32_t *result, BitBufferWithTree *buf, int32_t unk5)
 // done
 static void MCBlockDecMCNest(VideoState *state, MCPlane mcplanes[3], int32_t x, int32_t y)
 {
-    // TODO
-    printf("MCBlockDecMCNest(r5=0x%08X, r6=0x%08X)\n", x, y);
+    //printf("MCBlockDecMCNest(r5=0x%08X, r6=0x%08X)\n", x, y);
     void *target = mcplanes[0].target + (y/2 - 16) * state->planes[0].width_in_samples + x/2 - 32;
     for (int plane_idx = 0; plane_idx < 3; ++plane_idx)
     {
@@ -1671,7 +1668,7 @@ static void MCBlockDecMCNest(VideoState *state, MCPlane mcplanes[3], int32_t x, 
         for (int i = 0; i < plane->block_size_in_samples; ++i)
         {
             uint8_t *ptr = mcplane->payload_ptr8;
-            uint8_t r25 = ptr[plane->some_half_array[i] * 2 + 1];
+            uint8_t r25 = ptr[plane->some_half_array[i] * 2 + 1] & 0xF;
             void *r24 = mcplane->top + plane->some_word_array[i];
             uint32_t stride = plane->width_in_samples;
             if (r25 == 6)
@@ -1685,11 +1682,12 @@ static void MCBlockDecMCNest(VideoState *state, MCPlane mcplanes[3], int32_t x, 
                 void *r20 = mcplane->target + (bar >> 1) * plane->width_in_samples + (foo >> 1);
                 if (r25 == 0)
                 {
-                    _MotionComp(r24, stride, r20, stride, foo & 1, bar & 1);
+                    p_MotionComp(r24, stride, r20, stride, foo & 1, bar & 1);
                 }
                 else
                 {
                     uint32_t strideY = state->planes[0].width_in_samples;
+                    //printf("PrediAotBlock: plane_idx=%u, state->buf0[i].ptr=%p\n", plane_idx, state->buf0[plane_idx].ptr);
                     PrediAotBlock(state, r24, r20, stride, r25, target, strideY, plane_idx, foo & 1, bar & 1);
                 }
             }
@@ -1705,6 +1703,7 @@ static void BpicPlaneDec(SeqObj *seqobj, void *present, void *past, void *future
     initMCHandler(state, mcplanes, present, past, future);
     spread_PB_descMap(seqobj, mcplanes);
     resetMCHandler(state, mcplanes, present);
+    dumpPlanes(state, "filled");
     int32_t vec0, vec1;
     int32_t r30 = -1;
     for (int i = 0; i < seqobj->height; i += 8)
@@ -1712,7 +1711,7 @@ static void BpicPlaneDec(SeqObj *seqobj, void *present, void *past, void *future
         setMCTop(mcplanes);
         for (int j = 0; j < seqobj->width; j += 8)
         {
-            uint8_t bits = *(uint8_t*)mcplanes[0].payload_ptr8;
+            uint8_t bits = *((uint8_t*)mcplanes[0].payload_ptr8 + 1);
             int8_t bla = (bits >> 5) & 3;
             if (bla == 0)
             {
@@ -1720,7 +1719,6 @@ static void BpicPlaneDec(SeqObj *seqobj, void *present, void *past, void *future
             }
             else
             {
-                puts("bla");
                 --bla;
                 if (bla != r30)
                 {
@@ -1844,7 +1842,7 @@ enum FrameType
     B_FRAME = 0x30,
 };
 
-static void decode_video(Player *player, FILE *infile, uint16_t frame_type, uint32_t frame_size)
+static void decode_video(Player *player, FILE *infile, uint32_t gop, uint16_t frame_type, uint32_t frame_size)
 {
     // getBit() and getByte() overread by up to 3 bytes
     uint32_t overread = 3;
@@ -1877,12 +1875,12 @@ static void decode_video(Player *player, FILE *infile, uint16_t frame_type, uint
     //if (frame_type == I_FRAME)
     {
         char name[50];
-        static int i = 0; // HACK
-        sprintf(name, "video_frame_yuv_%02u.ppm", i);
-        dumpYUV(player, name);
-        sprintf(name, "video_frame_rgb_%02u.ppm", i++);
+        char type = "ipb"[(frame_type >> 4) - 1];
+        sprintf(name, "video_rgb_%u_%u_%c.ppm", gop, disp_id, type);
         printf("writing frame to %s...\n", name);
         dumpRGB(player, name);
+        sprintf(name, "video_yuv_%u_%u_%c.ppm", gop, disp_id, type);
+        dumpYUV(player, name);
     }
 
     // swap present and future
@@ -2232,7 +2230,7 @@ int main(int argc, char **argv)
 #ifdef VERBOSE_PRINT
                 printf("video frame %d/%d (%d)\n", (int)vid_frame_count, (int)expected_vid_frame_count, (int)total_vid_frames);
 #endif
-                decode_video(&player, infile, frame_id2, frame_size);
+                decode_video(&player, infile, block_count, frame_id2, frame_size);
             }
             else if (frame_id1 == 0)
             {

@@ -66,23 +66,47 @@ void yolo_open(yolo_lib *lib, const char *path)
         if (phdr->p_flags & PF_X)
             prot |= PROT_EXEC;
 #if 0
-        printf("mmap: addr 0x%08X aaddr 0x%08X size 0x%08X asize 0x%08X fsize 0x%08X offset 0x%08X %c%c%c\n", addr, aligned_addr, size, aligned_size, phdr.p_filesz, phdr.p_offset,
-               "r-"[!(phdr.p_flags & PF_R)],
-               "w-"[!(phdr.p_flags & PF_W)],
-               "x-"[!(phdr.p_flags & PF_X)]);
+        printf("mmap: addr 0x%08X aaddr 0x%08X size 0x%08X asize 0x%08X fsize 0x%08X offset 0x%08X %c%c%c\n", addr, aligned_addr, size, aligned_size, phdr->p_filesz, phdr->p_offset,
+               "r-"[!(phdr->p_flags & PF_R)],
+               "w-"[!(phdr->p_flags & PF_W)],
+               "x-"[!(phdr->p_flags & PF_X)]);
 #endif
         // mmap requires page-aligned file offsets, so we can't just map the file :(
-        if (mmap(aligned_addr, aligned_size, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_FIXED | MAP_PRIVATE, -1, 0) != aligned_addr)
+        if (mmap(aligned_addr, aligned_size, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_ANONYMOUS | MAP_FIXED | MAP_PRIVATE, -1, 0) != aligned_addr)
         {
             perror("mmap");
             exit(1);
         }
+    }
+
+    // need to first mmap all segments (in case we have overlaps due to alignment) and *then* copy the contents,
+    // otherwise the kernel will zero-out the overlap
+    for (unsigned i = 0; i < ehdr->e_phnum; ++i)
+    {
+        Elf32_Phdr *phdr = lib->f + ehdr->e_phoff + i * sizeof(Elf32_Phdr);
+        if (phdr->p_type != PT_LOAD)
+            continue;
+
+        void *addr = (void*)phdr->p_vaddr;
+        size_t size = phdr->p_memsz;
         memcpy(addr, lib->f + phdr->p_offset, phdr->p_filesz);
+#if 0
+        long page_size = sysconf(_SC_PAGESIZE);
+        void *aligned_addr = (void*)((long)addr & ~(page_size - 1));
+        size_t aligned_size = size + (addr - aligned_addr);
+        int prot = 0;
+        if (phdr->p_flags & PF_R)
+            prot |= PROT_READ;
+        if (phdr->p_flags & PF_W)
+            prot |= PROT_WRITE;
+        if (phdr->p_flags & PF_X)
+            prot |= PROT_EXEC;
         if (mprotect(aligned_addr, aligned_size, prot) != 0)
         {
             perror("mprotect");
             exit(1);
         }
+#endif
     }
 
     for (unsigned i = 0; i < ehdr->e_shnum; ++i)
