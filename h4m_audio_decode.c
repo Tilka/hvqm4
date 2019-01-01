@@ -568,11 +568,9 @@ static uint32_t GetAotBasis(VideoState *state, uint8_t dst[4][4], int32_t *sum, 
     return (*sum + foo) * inverse;
 }
 
-// buggy
 static uint32_t GetMCAotBasis(VideoState *state, uint8_t dst[4][4], int32_t *sum, uint8_t const *nest_data, uint32_t nest_stride, uint32_t plane_idx)
 {
-    //printf("GetMCAotBasis\n");
-    // the only difference to GetAotBasis() seems to be the "& 0xF"
+    // the only difference to GetAotBasis() seems to be the ">> 4 & 0xF"
     BitBuffer *buf = &state->buf0[plane_idx];
     uint16_t bits = read16(buf->ptr);
     buf->ptr += 2;
@@ -592,12 +590,12 @@ static uint32_t GetMCAotBasis(VideoState *state, uint8_t dst[4][4], int32_t *sum
         stride = nest_stride << ((bits >> 11) & 1);
     }
     uint8_t min, max;
-    min = max = nest_data[0] & 0xF; // !
+    min = max = (nest_data[0] >> 4) & 0xF; // !
     for (int i = 0; i < 4; ++i)
     {
         for (int j = 0; j < 4; ++j)
         {
-            uint8_t nest_value = nest_data[i * stride + j * step] & 0xF; // !
+            uint8_t nest_value = (nest_data[i * stride + j * step] >> 4) & 0xF; // !
             dst[i][j] = nest_value;
             min = nest_value < min ? nest_value : min;
             max = nest_value > max ? nest_value : max;
@@ -629,7 +627,7 @@ static int32_t GetMCAot1(VideoState *state, int32_t result[4][4], uint8_t const 
     // only difference to GetAot1() is the call to GetMCAotBasis()
     uint8_t byte_result[4][4];
     int32_t dummy = 0;
-    uint32_t factor = pGetMCAotBasis(state, byte_result, &dummy, nest_data, nest_stride, plane_idx);
+    uint32_t factor = GetMCAotBasis(state, byte_result, &dummy, nest_data, nest_stride, plane_idx);
     int32_t sum = 0;
     for (int i = 0; i < 4; ++i)
         for (int j = 0; j < 4; ++j)
@@ -669,7 +667,7 @@ static int32_t GetMCAotSum(VideoState *state, int32_t result[4][4], uint8_t coun
     int32_t temp = 0;
     for (int k = 0; k < count; ++k)
     {
-        uint32_t factor = pGetMCAotBasis(state, byte_result, &temp, nest_data, nest_stride, plane_idx);
+        uint32_t factor = GetMCAotBasis(state, byte_result, &temp, nest_data, nest_stride, plane_idx);
         for (int i = 0; i < 4; ++i)
             for (int j = 0; j < 4; ++j)
                 result[i][j] += factor * byte_result[i][j];
@@ -1226,7 +1224,7 @@ static void PrediAotBlock(VideoState *state, uint8_t *dst, uint8_t const *src, u
     uint8_t mdst[4][4];
     uint32_t const dst_stride = 4;
     _MotionComp(mdst, dst_stride, src, stride, foo, bar);
-    int32_t sum = 0;
+    int32_t sum = 8;
     for (int i = 0; i < 4; ++i)
         for (int j = 0; j < 4; ++j)
             sum += mdst[i][j];
@@ -1697,7 +1695,7 @@ static void MCBlockDecMCNest(VideoState *state, MCPlane mcplanes[3], int32_t x, 
                 {
                     uint32_t strideY = state->planes[0].width_in_samples;
                     //printf("PrediAotBlock: plane_idx=%u, state->buf0[i].ptr=%p\n", plane_idx, state->buf0[plane_idx].ptr);
-                    pPrediAotBlock(state, r24, r20, stride, r25, target, strideY, plane_idx, foo & 1, bar & 1);
+                    PrediAotBlock(state, r24, r20, stride, r25, target, strideY, plane_idx, foo & 1, bar & 1);
                 }
             }
         }

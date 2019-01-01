@@ -198,16 +198,16 @@ static void yolo_close(yolo_lib *lib)
 
 static void load_library(const char *lib_path)
 {
-    yolo_lib rm_dll;
-    yolo_open(&rm_dll, lib_path);
+    yolo_lib lib;
+    yolo_open(&lib, lib_path);
 
     // locate symbols
-#define SYMBOLT(x, y) p##x = yolo_sym(&rm_dll, #x);
+#define SYMBOLT(x, y) p##x = yolo_sym(&lib, #x);
 #include "symbols.inc"
 #undef SYMBOLT
 
     // patch function calls
-#define PATCH(x) yolo_patch(&rm_dll, #x, x);
+#define PATCH(x) yolo_patch(&lib, #x, x);
     PATCH(GetMCAot1)
     PATCH(GetMCAotSum)
     PATCH(_MotionComp)
@@ -215,5 +215,5 @@ static void load_library(const char *lib_path)
     PATCH(decodeHuff)
 #undef PATCH
 
-    yolo_close(&rm_dll);
+    yolo_close(&lib);
 }
