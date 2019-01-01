@@ -19,9 +19,10 @@ typedef struct
 {
     void *f;
     size_t f_size;
-    char const **section_names;
     Elf32_Shdr *symtab;
     Elf32_Shdr *strtab;
+    Elf32_Shdr *relatext;
+    void *trampolines;
 } yolo_lib;
 
 void yolo_open(yolo_lib *lib, const char *path)
@@ -46,14 +47,15 @@ void yolo_open(yolo_lib *lib, const char *path)
     }
     fclose(f);
 
+    void *max_addr = 0;
     Elf32_Ehdr *ehdr = lib->f;
-    for (unsigned i = 0; i < ehdr->e_phnum; ++i)
+    long page_size = sysconf(_SC_PAGESIZE);
+    for (size_t i = 0; i < ehdr->e_phnum; ++i)
     {
         Elf32_Phdr *phdr = lib->f + ehdr->e_phoff + i * sizeof(Elf32_Phdr);
         if (phdr->p_type != PT_LOAD)
             continue;
 
-        long page_size = sysconf(_SC_PAGESIZE);
         void *addr = (void*)phdr->p_vaddr;
         void *aligned_addr = (void*)((long)addr & ~(page_size - 1));
         size_t size = phdr->p_memsz;
@@ -77,11 +79,20 @@ void yolo_open(yolo_lib *lib, const char *path)
             perror("mmap");
             exit(1);
         }
+        max_addr = addr + size > max_addr ? addr + size : max_addr;
+    }
+
+    // map one adjacent page to store patch trampolines
+    lib->trampolines = (void*)((long)max_addr & ~(page_size - 1));
+    if (mmap(lib->trampolines, page_size, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_ANONYMOUS | MAP_FIXED | MAP_PRIVATE, -1, 0) != lib->trampolines)
+    {
+        perror("mmap trampolines");
+        exit(1);
     }
 
     // need to first mmap all segments (in case we have overlaps due to alignment) and *then* copy the contents,
     // otherwise the kernel will zero-out the overlap
-    for (unsigned i = 0; i < ehdr->e_phnum; ++i)
+    for (size_t i = 0; i < ehdr->e_phnum; ++i)
     {
         Elf32_Phdr *phdr = lib->f + ehdr->e_phoff + i * sizeof(Elf32_Phdr);
         if (phdr->p_type != PT_LOAD)
@@ -109,37 +120,75 @@ void yolo_open(yolo_lib *lib, const char *path)
 #endif
     }
 
-    for (unsigned i = 0; i < ehdr->e_shnum; ++i)
+    Elf32_Shdr *shstr = lib->f + ehdr->e_shoff + ehdr->e_shstrndx * sizeof(Elf32_Shdr);
+    for (size_t i = 0; i < ehdr->e_shnum; ++i)
     {
         Elf32_Shdr *shdr = lib->f + ehdr->e_shoff + i * sizeof(Elf32_Shdr);
         if (shdr->sh_type == SHT_SYMTAB)
             lib->symtab = shdr;
         if (shdr->sh_type == SHT_STRTAB)
             lib->strtab = shdr;
+        const char *shname = lib->f + shstr->sh_offset + shdr->sh_name;
+        if (strcmp(shname, ".rela.text") == 0)
+            lib->relatext = shdr;
     }
+}
+
+size_t yolo_sym_index(yolo_lib *lib, const char *symbol)
+{
+    size_t sym_count = lib->symtab->sh_size / sizeof(Elf32_Sym);
+    for (size_t i = 0; i < sym_count; ++i)
+    {
+        Elf32_Sym *sym = lib->f + lib->symtab->sh_offset + i * sizeof(Elf32_Sym);
+        const char *name = lib->f + lib->strtab->sh_offset + sym->st_name;
+        if (strcmp(name, symbol) == 0)
+            return i;
+    }
+    fprintf(stderr, "couldn't find symbol '%s'\n", symbol);
+    exit(EXIT_FAILURE);
 }
 
 void *yolo_sym(yolo_lib *lib, const char *symbol)
 {
-    char const *str_start = lib->f + lib->strtab->sh_offset;
-    char const *str = str_start;
-    while (str - str_start < lib->strtab->sh_size)
+    size_t i = yolo_sym_index(lib, symbol);
+    Elf32_Sym *sym = lib->f + lib->symtab->sh_offset + i * sizeof(Elf32_Sym);
+    return sym->st_value;
+}
+
+// patch all references to symbol so that they point to target
+static void yolo_patch(yolo_lib *lib, const char *symbol, void *target)
+{
+    Elf32_Ehdr *ehdr = lib->f + lib->relatext->sh_offset;
+    size_t sym_index = yolo_sym_index(lib, symbol);
+    size_t rel_count = lib->relatext->sh_size / sizeof(Elf32_Rela);
+    for (size_t i = 0; i < rel_count; ++i)
     {
-        if (strcmp(str, symbol) == 0)
+        Elf32_Rela *rel = lib->f + lib->relatext->sh_offset + i * sizeof(Elf32_Rela);
+        if (ELF32_R_SYM(rel->r_info) == sym_index)
         {
-            for (unsigned j = 0; j < lib->symtab->sh_size / sizeof(Elf32_Sym); ++j)
+            printf("need to patch reference to %s at 0x%08X\n", symbol, rel->r_offset);
+            uint32_t *ptr = (uint32_t*)rel->r_offset;
+            size_t diff = lib->trampolines - rel->r_offset;
+            if (diff > 0x3FFFFFF)
             {
-                Elf32_Sym *sym = lib->f + lib->symtab->sh_offset + j * sizeof(Elf32_Sym);
-                if (sym->st_name == str - str_start)
-                    return sym->st_value;
+                show_mappings();
+                fputs("R_PPC_REL24 target out-of-range\n", stderr);
+                exit(1);
             }
-            fprintf(stderr, "couldn't find symbol '%s'\n", symbol);
-            exit(EXIT_FAILURE);
+            uint32_t mask = 0x3FFFFFC;
+            *ptr = (*ptr & ~mask) | (diff & mask);
+            uint32_t *code = lib->trampolines;
+            // lis r0, hi
+            code[0] = 0x3C000000 | ((long)target >> 16);
+            // ori r0, lo
+            code[1] = 0x60000000 | ((long)target & 0xFFFF);
+            // mtctr
+            code[2] = 0x7C0903A6;
+            // bctr
+            code[3] = 0x4E800420;
+            lib->trampolines += 4 * sizeof(uint32_t);
         }
-        str += strlen(str) + 1;
     }
-    fprintf(stderr, "couldn't find symbol '%s'\n", symbol);
-    exit(EXIT_FAILURE);
 }
 
 static void yolo_close(yolo_lib *lib)
@@ -147,21 +196,24 @@ static void yolo_close(yolo_lib *lib)
     munmap(lib->f, lib->f_size);
 }
 
-static void bla()
-{
-    fputs("called an uninitialized function pointer\n", stderr);
-    exit(1);
-}
-
-#define SYMBOLT(x, T) T (*p##x)() = bla;
-#include "symbols.inc"
-#undef SYMBOLT
-
 static void load_library(const char *lib_path)
 {
     yolo_lib rm_dll;
     yolo_open(&rm_dll, lib_path);
+
+    // locate symbols
 #define SYMBOLT(x, y) p##x = yolo_sym(&rm_dll, #x);
 #include "symbols.inc"
 #undef SYMBOLT
+
+    // patch function calls
+#define PATCH(x) yolo_patch(&rm_dll, #x, x);
+    PATCH(GetMCAot1)
+    PATCH(GetMCAotSum)
+    PATCH(_MotionComp)
+    PATCH(decodeSOvfSym)
+    PATCH(decodeHuff)
+#undef PATCH
+
+    yolo_close(&rm_dll);
 }

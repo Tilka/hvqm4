@@ -7,8 +7,15 @@
 
 #pragma pack(1)
 
-#define YOLO_INCLUDE
-#include "yoloader.c"
+static void bla()
+{
+    fputs("called an uninitialized function pointer\n", stderr);
+    exit(1);
+}
+
+#define SYMBOLT(x, T) T (*p##x)() = bla;
+#include "symbols.inc"
+#undef SYMBOLT
 
 /* .h4m (HVQM4 1.3/1.5) audio decoder 0.3 by hcs */
 
@@ -561,6 +568,7 @@ static uint32_t GetAotBasis(VideoState *state, uint8_t dst[4][4], int32_t *sum, 
     return (*sum + foo) * inverse;
 }
 
+// buggy
 static uint32_t GetMCAotBasis(VideoState *state, uint8_t dst[4][4], int32_t *sum, uint8_t const *nest_data, uint32_t nest_stride, uint32_t plane_idx)
 {
     //printf("GetMCAotBasis\n");
@@ -621,7 +629,7 @@ static int32_t GetMCAot1(VideoState *state, int32_t result[4][4], uint8_t const 
     // only difference to GetAot1() is the call to GetMCAotBasis()
     uint8_t byte_result[4][4];
     int32_t dummy = 0;
-    uint32_t factor = GetMCAotBasis(state, byte_result, &dummy, nest_data, nest_stride, plane_idx);
+    uint32_t factor = pGetMCAotBasis(state, byte_result, &dummy, nest_data, nest_stride, plane_idx);
     int32_t sum = 0;
     for (int i = 0; i < 4; ++i)
         for (int j = 0; j < 4; ++j)
@@ -661,7 +669,7 @@ static int32_t GetMCAotSum(VideoState *state, int32_t result[4][4], uint8_t coun
     int32_t temp = 0;
     for (int k = 0; k < count; ++k)
     {
-        uint32_t factor = GetMCAotBasis(state, byte_result, &temp, nest_data, nest_stride, plane_idx);
+        uint32_t factor = pGetMCAotBasis(state, byte_result, &temp, nest_data, nest_stride, plane_idx);
         for (int i = 0; i < 4; ++i)
             for (int j = 0; j < 4; ++j)
                 result[i][j] += factor * byte_result[i][j];
@@ -1202,6 +1210,7 @@ static void IntraAotBlock(VideoState *state, uint8_t *dst, uint32_t stride, uint
     }
 }
 
+// buggy
 static void PrediAotBlock(VideoState *state, uint8_t *dst, uint8_t const *src, uint32_t stride, uint8_t block_type,
                           uint8_t *nest_data, uint32_t h_nest_size, uint32_t plane_idx, uint32_t foo, uint32_t bar)
 {
@@ -1682,13 +1691,13 @@ static void MCBlockDecMCNest(VideoState *state, MCPlane mcplanes[3], int32_t x, 
                 void *r20 = mcplane->target + (bar >> 1) * plane->width_in_samples + (foo >> 1) + plane->some_word_array[i];
                 if (r25 == 0)
                 {
-                    p_MotionComp(r24, stride, r20, stride, foo & 1, bar & 1);
+                    _MotionComp(r24, stride, r20, stride, foo & 1, bar & 1);
                 }
                 else
                 {
                     uint32_t strideY = state->planes[0].width_in_samples;
                     //printf("PrediAotBlock: plane_idx=%u, state->buf0[i].ptr=%p\n", plane_idx, state->buf0[plane_idx].ptr);
-                    PrediAotBlock(state, r24, r20, stride, r25, target, strideY, plane_idx, foo & 1, bar & 1);
+                    pPrediAotBlock(state, r24, r20, stride, r25, target, strideY, plane_idx, foo & 1, bar & 1);
                 }
             }
         }
@@ -1703,7 +1712,6 @@ static void BpicPlaneDec(SeqObj *seqobj, void *present, void *past, void *future
     initMCHandler(state, mcplanes, present, past, future);
     spread_PB_descMap(seqobj, mcplanes);
     resetMCHandler(state, mcplanes, present);
-    dumpPlanes(state, "filled");
     int32_t vec0, vec1;
     int32_t r30 = -1;
     for (int i = 0; i < seqobj->height; i += 8)
@@ -1842,6 +1850,10 @@ enum FrameType
     B_FRAME = 0x30,
 };
 
+#define YOLO_INCLUDE
+#include "yoloader.c"
+
+
 static void decode_video(Player *player, FILE *infile, uint32_t gop, uint16_t frame_type, uint32_t frame_size)
 {
     // getBit() and getByte() overread by up to 3 bytes
@@ -1876,10 +1888,10 @@ static void decode_video(Player *player, FILE *infile, uint32_t gop, uint16_t fr
     {
         char name[50];
         char type = "ipb"[(frame_type >> 4) - 1];
-        sprintf(name, "video_rgb_%u_%u_%c.ppm", gop, disp_id, type);
+        sprintf(name, "output/video_rgb_%u_%u_%c.ppm", gop, disp_id, type);
         printf("writing frame to %s...\n", name);
         dumpRGB(player, name);
-        sprintf(name, "video_yuv_%u_%u_%c.ppm", gop, disp_id, type);
+        sprintf(name, "output/video_yuv_%u_%u_%c.ppm", gop, disp_id, type);
         dumpYUV(player, name);
     }
 
