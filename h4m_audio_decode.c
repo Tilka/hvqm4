@@ -10,7 +10,7 @@
 static void bla()
 {
     fputs("called an uninitialized function pointer\n", stderr);
-    exit(1);
+    exit(EXIT_FAILURE);
 }
 
 #define SYMBOLT(x, T) T (*p##x)() = bla;
@@ -330,14 +330,18 @@ typedef struct
     uint32_t value;    // 8-B
     int32_t bit;       // C-F
 } BitBuffer;
+#ifndef NATIVE
 _Static_assert(sizeof(BitBuffer) == 0x10, "sizeof(BitBuffer) is incorrect");
+#endif
 
 typedef struct
 {
     BitBuffer buf; // 0-F
     Tree *tree;    // 0x10-0x13
 } BitBufferWithTree;
+#ifndef NATIVE
 _Static_assert(sizeof(BitBufferWithTree) == 0x14, "sizeof(BitBufferWithTree) is incorrect");
+#endif
 
 typedef struct
 {
@@ -360,7 +364,9 @@ typedef struct
     uint8_t block_size_in_samples; // 34
     uint8_t padding[3]; // 35-37
 } HVQPlaneDesc;
+#ifndef NATIVE
 _Static_assert(sizeof(HVQPlaneDesc) == 0x38, "sizeof(HVQPlaneDesc) is incorrect");
+#endif
 
 typedef struct
 {
@@ -388,7 +394,9 @@ typedef struct
     uint8_t unk6CD4[2]; // 0x6CD4
     uint8_t maybe_padding[2]; // 0x6CD6-0x6CD7
 } VideoState;
+#ifndef NATIVE
 _Static_assert(sizeof(VideoState) == 0x6CD8, "sizeof(VideoState) is incorrect");
+#endif
 
 typedef struct
 {
@@ -1148,7 +1156,9 @@ typedef struct
     uint32_t h_samp_per_block;
     uint32_t stride;
 } MCPlane;
+#ifndef NATIVE
 _Static_assert(sizeof(MCPlane) == 0x34, "sizeof(MCPlane) is wrong");
+#endif
 
 // done
 static void MotionComp(VideoState *state, MCPlane mcplanes[3], int32_t unk5, int32_t unk6)
@@ -1848,8 +1858,10 @@ enum FrameType
     B_FRAME = 0x30,
 };
 
+#ifndef NATIVE
 #define YOLO_INCLUDE
 #include "yoloader.c"
+#endif
 
 
 static void decode_video(Player *player, FILE *infile, uint32_t gop, uint16_t frame_type, uint32_t frame_size)
@@ -1889,8 +1901,8 @@ static void decode_video(Player *player, FILE *infile, uint32_t gop, uint16_t fr
         sprintf(name, "output/video_rgb_%u_%u_%c.ppm", gop, disp_id, type);
         printf("writing frame to %s...\n", name);
         dumpRGB(player, name);
-        sprintf(name, "output/video_yuv_%u_%u_%c.ppm", gop, disp_id, type);
-        dumpYUV(player, name);
+        //sprintf(name, "output/video_yuv_%u_%u_%c.ppm", gop, disp_id, type);
+        //dumpYUV(player, name);
     }
 
     // swap present and future
