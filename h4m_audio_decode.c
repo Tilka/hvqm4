@@ -13,9 +13,11 @@ static void bla()
     exit(EXIT_FAILURE);
 }
 
+#ifndef NATIVE
 #define SYMBOLT(x, T) T (*p##x)() = bla;
 #include "symbols.inc"
 #undef SYMBOLT
+#endif
 
 /* .h4m (HVQM4 1.3/1.5) audio decoder 0.3 by hcs */
 
@@ -1870,8 +1872,8 @@ static void decode_video(Player *player, FILE *infile, uint32_t gop, uint16_t fr
     uint8_t *frame = malloc(frame_size + overread);
     fread(frame, frame_size, 1, infile);
 
-    uint32_t disp_id = read32(frame);
-    printf("display order within GOP: %u\n", disp_id);
+    //uint32_t disp_id = read32(frame);
+    //printf("display order within GOP: %u\n", disp_id);
 
     // swap past and future
     if (frame_type != B_FRAME)
@@ -1884,9 +1886,9 @@ static void decode_video(Player *player, FILE *infile, uint32_t gop, uint16_t fr
     SeqObj *seqobj = &player->seqobj;
     switch (frame_type)
     {
-    case I_FRAME: puts("I frame"); HVQM4DecodeIpic(seqobj, frame + 4, player->present);                               break;
-    case P_FRAME: puts("P frame"); HVQM4DecodePpic(seqobj, frame + 4, player->present, player->past);                 break;
-    case B_FRAME: puts("B frame"); HVQM4DecodeBpic(seqobj, frame + 4, player->present, player->past, player->future); break;
+    case I_FRAME: HVQM4DecodeIpic(seqobj, frame + 4, player->present);                               break;
+    case P_FRAME: HVQM4DecodePpic(seqobj, frame + 4, player->present, player->past);                 break;
+    case B_FRAME: HVQM4DecodeBpic(seqobj, frame + 4, player->present, player->past, player->future); break;
     default:
         fprintf(stderr, "unknown video frame type 0x%x\n", frame_type);
         exit(EXIT_FAILURE);
@@ -1897,8 +1899,10 @@ static void decode_video(Player *player, FILE *infile, uint32_t gop, uint16_t fr
     {
         char name[50];
         char type = "ipb"[(frame_type >> 4) - 1];
-        sprintf(name, "output/video_rgb_%u_%u_%c.ppm", gop, disp_id, type);
-        printf("writing frame to %s...\n", name);
+        static uint32_t frame_id = 0;
+        sprintf(name, "output/video_rgb_%u.ppm", frame_id++);
+        //sprintf(name, "output/video_rgb_%u_%u_%c.ppm", gop, disp_id, type);
+        //printf("writing frame to %s...\n", name);
         dumpRGB(player, name);
         //sprintf(name, "output/video_yuv_%u_%u_%c.ppm", gop, disp_id, type);
         //dumpYUV(player, name);
@@ -1911,8 +1915,6 @@ static void decode_video(Player *player, FILE *infile, uint32_t gop, uint16_t fr
         player->present = player->future;
         player->future = tmp;
     }
-
-    puts("");
 }
 
 /* stream structure */
