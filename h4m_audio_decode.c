@@ -5,6 +5,7 @@
 #include <string.h>
 #include <stddef.h>
 
+#ifndef NATIVE
 #pragma pack(1)
 
 static void bla()
@@ -13,7 +14,6 @@ static void bla()
     exit(EXIT_FAILURE);
 }
 
-#ifndef NATIVE
 #define SYMBOLT(x, T) T (*p##x)() = bla;
 #include "symbols.inc"
 #undef SYMBOLT
@@ -746,9 +746,9 @@ static void dumpYUV(Player *player, char const *path)
     uint8_t const *p = player->present;
     for (int plane = 0; plane < 2; ++plane)
     {
-        for (int i = 0; i < h; ++i)
+        for (uint32_t i = 0; i < h; ++i)
         {
-            for (int j = 0; j < w; ++j)
+            for (uint32_t j = 0; j < w; ++j)
             {
                 if (plane == 0 || j < w / 2)
                     fputc(*p++, f);
@@ -773,9 +773,9 @@ static void dumpRGB(Player *player, char const *path)
     uint8_t const *yp = player->present;
     uint8_t const *up = yp + w*h;
     uint8_t const *vp = up + w*h/4;
-    for (int i = 0; i < h; ++i)
+    for (uint32_t i = 0; i < h; ++i)
     {
-        for (int j = 0; j < w; ++j)
+        for (uint32_t j = 0; j < w; ++j)
         {
             float y = yp[i   * w   + j];
             float u = up[i/2 * w/2 + j/2];
@@ -1027,8 +1027,7 @@ static void MakeNest(VideoState *state, uint16_t unk4, uint16_t unk5)
     HVQPlaneDesc *y_plane = &state->planes[0];
     uint8_t *ptr = y_plane->payload + (y_plane->h_blocks_safe * unk5 + unk4) * 2;
 
-    uint32_t r19, r20;
-    int32_t r23, r24, r25, r26;
+    int32_t r19, r20, r23, r24, r25, r26;
 
     if (y_plane->h_blocks < state->h_nest_size)
     {
@@ -1898,9 +1897,10 @@ static void decode_video(Player *player, FILE *infile, uint32_t gop, uint16_t fr
     //if (frame_type == I_FRAME)
     {
         char name[50];
-        char type = "ipb"[(frame_type >> 4) - 1];
         static uint32_t frame_id = 0;
         sprintf(name, "output/video_rgb_%u.ppm", frame_id++);
+        (void)gop;
+        //char type = "ipb"[(frame_type >> 4) - 1];
         //sprintf(name, "output/video_rgb_%u_%u_%c.ppm", gop, disp_id, type);
         //printf("writing frame to %s...\n", name);
         dumpRGB(player, name);
@@ -2132,7 +2132,7 @@ static void decv_init(Player *player)
 
 int main(int argc, char **argv)
 {
-    printf("h4m 'HVQM4 1.3/1.5' audio decoder 0.3 by hcs\n\n");
+    printf("h4m 'HVQM4 1.3/1.5' decoder 0.4 by flacs/hcs\n\n");
     if (argc != 3)
     {
         fprintf(stderr, "usage: %s file.h4m output.wav\n", argv[0]);
