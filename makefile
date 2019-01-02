@@ -10,9 +10,15 @@ debug: build_emu
 	toolchain/bin/powerpc-linux-gdb -ex 'target remote localhost:1234' -ex c h4m_audio_decode
 
 native:
-	clang -Wall -Wextra -Wno-unused-function -g -fsanitize=address -fno-omit-frame-pointer -m32 h4m_audio_decode.c -o h4m_audio_decode -DNATIVE=1
+	clang -m32 -Og -Wall -Wextra h4m_audio_decode.c -o h4m_audio_decode -DNATIVE=1 -fsanitize=address -g
 	rm -f output/*.ppm
 	./h4m_audio_decode samples/LOGOS.h4m foo.wav
+
+native64:
+	clang -O2 -funroll-loops -Wall -Wextra h4m_audio_decode.c -o h4m_audio_decode -DNATIVE=1
+	rm -f output/*.ppm
+	./h4m_audio_decode samples/LOGOS.h4m foo.wav
+
 
 clean:
 	rm -f h4m_audio_decode output/*.ppm

@@ -1609,11 +1609,11 @@ static void MCBlockDecDCNest(VideoState *state, MCPlane mcplanes[3])
         uint8_t *ptr = mcplanes[i].payload_ptr8;
         HVQPlaneDesc *plane = &state->planes[i];
         uint32_t stride = plane->width_in_samples;
-        uint32_t r26 = plane->h_blocks_safe;
+        int32_t r26 = plane->h_blocks_safe;
         for (int j = 0; j < plane->block_size_in_samples; ++j)
         {
             void *r24 = mcplanes[i].top + plane->some_word_array[j];
-            uint32_t r30 = plane->some_half_array[j];
+            int32_t r30 = plane->some_half_array[j];
             uint32_t r29 = ptr[r30 * 2];
             uint32_t r23 = ptr[r30 * 2 + 1] & 0xF;
             // see also IpicBlockDec
@@ -1808,8 +1808,7 @@ static void HVQM4DecodeBpic(SeqObj *seqobj, uint8_t const *frame, void *present,
     state->unk6CD4[0] = frame[3];
     state->unk6CD2[1] = frame[4];
     state->unk6CD4[1] = frame[5];
-    uint16_t foo = read16(frame + 4);
-    uint16_t bar = read16(frame + 6);
+    // frame[6] and frame[7] are unused
     uint8_t const *data = frame + 0x4C;
     frame += 8;
     for (int i = 0; i < 2; ++i)
