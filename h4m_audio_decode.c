@@ -666,7 +666,6 @@ static int32_t GetAotSum(VideoState *state, int32_t result[4][4], uint8_t count,
     return sum >> 4;
 }
 
-// TODO: unverified
 static int32_t GetMCAotSum(VideoState *state, int32_t result[4][4], uint8_t count, uint8_t const *nest_data, uint32_t nest_stride, uint32_t plane_idx)
 {
     //printf("GetMCAotSum(count=%u, nest_stride=%u, plane_idx=%u)\n", count, nest_stride, plane_idx);
@@ -738,6 +737,7 @@ static void setHVQPlaneDesc(SeqObj *seqobj, uint8_t plane_idx, uint8_t h_samp, u
 }
 
 // HACK: assumes 4:2:0
+__attribute__((unused))
 static void dumpYUV(Player *player, char const *path)
 {
     FILE *f = fopen(path, "wb+");
@@ -791,6 +791,7 @@ static void dumpRGB(Player *player, char const *path)
     fclose(f);
 }
 
+__attribute__((unused))
 static void dumpPlanes(VideoState *state, char const *prefix)
 {
     for (int plane_idx = 0; plane_idx < 3; ++plane_idx)
@@ -1864,14 +1865,14 @@ enum FrameType
 #endif
 
 
-static void decode_video(Player *player, FILE *infile, uint32_t gop, uint16_t frame_type, uint32_t frame_size)
+static void decode_video(Player *player, FILE *infile, uint32_t gop_start, uint16_t frame_type, uint32_t frame_size)
 {
     // getBit() and getByte() overread by up to 3 bytes
     uint32_t overread = 3;
     uint8_t *frame = malloc(frame_size + overread);
     fread(frame, frame_size, 1, infile);
 
-    //uint32_t disp_id = read32(frame);
+    uint32_t disp_id = read32(frame);
     //printf("display order within GOP: %u\n", disp_id);
 
     // swap past and future
@@ -1897,9 +1898,7 @@ static void decode_video(Player *player, FILE *infile, uint32_t gop, uint16_t fr
     //if (frame_type == I_FRAME)
     {
         char name[50];
-        static uint32_t frame_id = 0;
-        sprintf(name, "output/video_rgb_%u.ppm", frame_id++);
-        (void)gop;
+        sprintf(name, "output/video_rgb_%u.ppm", gop_start + disp_id);
         //char type = "ipb"[(frame_type >> 4) - 1];
         //sprintf(name, "output/video_rgb_%u_%u_%c.ppm", gop, disp_id, type);
         //printf("writing frame to %s...\n", name);
@@ -2249,11 +2248,10 @@ int main(int argc, char **argv)
                 /* video */
                 first_vid = 0;
                 vid_frame_count ++;
-                total_vid_frames ++;
 #ifdef VERBOSE_PRINT
-                printf("video frame %d/%d (%d)\n", (int)vid_frame_count, (int)expected_vid_frame_count, (int)total_vid_frames);
+                printf("video frame %d/%d\n", (int)vid_frame_count, (int)expected_vid_frame_count);
 #endif
-                decode_video(&player, infile, block_count, frame_id2, frame_size);
+                decode_video(&player, infile, total_vid_frames, frame_id2, frame_size);
             }
             else if (frame_id1 == 0)
             {
@@ -2299,6 +2297,8 @@ int main(int argc, char **argv)
             fprintf(stderr, "frame count mismatch\n");
             exit(EXIT_FAILURE);
         }
+
+        total_vid_frames += vid_frame_count;
 
 #ifdef VERBOSE_PRINT
         printf("block %d ended at 0x%lx (%d samples)\n", (int)block_count, ftell(infile), block_sample_count);
