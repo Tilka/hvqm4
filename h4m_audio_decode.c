@@ -619,32 +619,6 @@ static uint32_t GetMCAotBasis(VideoState *state, uint8_t dst[4][4], int32_t *sum
     return (*sum + foo) * inverse;
 }
 
-static int32_t GetAot1(VideoState *state, int32_t result[4][4], uint8_t const *nest_data, uint32_t nest_stride, uint32_t plane_idx)
-{
-    uint8_t byte_result[4][4];
-    int32_t dummy = 0;
-    uint32_t factor = GetAotBasis(state, byte_result, &dummy, nest_data, nest_stride, plane_idx);
-    int32_t sum = 0;
-    for (int i = 0; i < 4; ++i)
-        for (int j = 0; j < 4; ++j)
-            sum += result[i][j] = factor * byte_result[i][j];
-    return sum >> 4;
-}
-
-static int32_t GetMCAot1(VideoState *state, int32_t result[4][4], uint8_t const *nest_data, uint32_t nest_stride, uint32_t plane_idx)
-{
-    //printf("GetMCAot1(nest_stride=%u, plane_idx=%u)\n", nest_stride, plane_idx);
-    // only difference to GetAot1() is the call to GetMCAotBasis()
-    uint8_t byte_result[4][4];
-    int32_t dummy = 0;
-    uint32_t factor = GetMCAotBasis(state, byte_result, &dummy, nest_data, nest_stride, plane_idx);
-    int32_t sum = 0;
-    for (int i = 0; i < 4; ++i)
-        for (int j = 0; j < 4; ++j)
-            sum += result[i][j] = factor * byte_result[i][j];
-    return sum >> 4;
-}
-
 static int32_t GetAotSum(VideoState *state, int32_t result[4][4], uint8_t count, uint8_t const *nest_data, uint32_t nest_stride, uint32_t plane_idx)
 {
     for (int i = 0; i < 4; ++i)
@@ -1205,10 +1179,7 @@ static void IntraAotBlock(VideoState *state, uint8_t *dst, uint32_t stride, uint
     }
     int32_t r30 = unk6 << state->unk_shift;
     int32_t result[4][4];
-    if (block_type == 1)
-        r30 -= GetAot1(state, result, state->nest_data, state->h_nest_size, plane_idx);
-    else
-        r30 -= GetAotSum(state, result, block_type, state->nest_data, state->h_nest_size, plane_idx);
+    r30 -= GetAotSum(state, result, block_type, state->nest_data, state->h_nest_size, plane_idx);
     for (int i = 0; i < 4; ++i)
     {
         for (int j = 0; j < 4; ++j)
@@ -1227,11 +1198,7 @@ static void PrediAotBlock(VideoState *state, uint8_t *dst, uint8_t const *src, u
     //printf("PrediAotBlock(stride=%u, block_type=%u, h_nest_size=%u, plane_idx=%u, foo=%u, bar=%u)\n", stride, block_type, h_nest_size, plane_idx, foo, bar);
     int32_t result[4][4];
     --block_type;
-    uint32_t r20;
-    if (block_type == 1)
-        r20 = GetMCAot1(state, result, nest_data, h_nest_size, plane_idx);
-    else
-        r20 = GetMCAotSum(state, result, block_type, nest_data, h_nest_size, plane_idx);
+    uint32_t r20 = GetMCAotSum(state, result, block_type, nest_data, h_nest_size, plane_idx);
 
     uint8_t mdst[4][4];
     uint32_t const dst_stride = 4;
