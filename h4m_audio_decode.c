@@ -226,10 +226,13 @@ static void decode_audio(struct audio_state *state, int first_aud, uint32_t samp
         }
     }
 
-    if (sample_count != fwrite(samples, sizeof(int16_t)*channels, sample_count, outfile))
+    if (channels)
     {
-        fprintf(stderr, "error writing output\n");
-        exit(EXIT_FAILURE);
+        if (sample_count != fwrite(samples, sizeof(int16_t)*channels, sample_count, outfile))
+        {
+            perror("fwrite");
+            exit(EXIT_FAILURE);
+        }
     }
 
     free(samples);
@@ -1191,7 +1194,6 @@ static void IntraAotBlock(VideoState *state, uint8_t *dst, uint32_t stride, uint
     }
 }
 
-// buggy
 static void PrediAotBlock(VideoState *state, uint8_t *dst, uint8_t const *src, uint32_t stride, uint8_t block_type,
                           uint8_t *nest_data, uint32_t h_nest_size, uint32_t plane_idx, uint32_t foo, uint32_t bar)
 {
@@ -1899,10 +1901,10 @@ typedef struct
     uint32_t header_size;   /* 0x10-0x13 */
     uint32_t body_size;     /* 0x14-0x17 */
     uint32_t blocks;        /* 0x18-0x1B */
-    uint32_t audio_frames;  /* 0x1C-0x1F */
-    uint32_t video_frames;  /* 0x20-0x23 */
+    uint32_t video_frames;  /* 0x1C-0x1F */
+    uint32_t audio_frames;  /* 0x20-0x23 */
     uint32_t usec_per_frame;/* 0x24-0x27 (33366, 33367, 40000) */
-    uint32_t duration;      /* 0x28-0x2B */
+    uint32_t max_frame_sz;  /* 0x28-0x2B */
     uint32_t unk2C;         /* 0x2C-0x2F (0) */
     uint32_t audio_frame_sz;/* 0x30-0x33 */
     uint16_t hres;          /* 0x34-0x35 */
@@ -1937,10 +1939,10 @@ static void load_header(HVQM4_header *header, uint8_t *raw_header)
     header->header_size = read32(&raw_header[0x10]);
     header->body_size = read32(&raw_header[0x14]);
     header->blocks = read32(&raw_header[0x18]);
-    header->audio_frames = read32(&raw_header[0x1C]);
-    header->video_frames = read32(&raw_header[0x20]);
+    header->video_frames = read32(&raw_header[0x1C]);
+    header->audio_frames = read32(&raw_header[0x20]);
     header->usec_per_frame = read32(&raw_header[0x24]);
-    header->duration = read32(&raw_header[0x28]);
+    header->max_frame_sz = read32(&raw_header[0x28]);
     header->unk2C = read32(&raw_header[0x2C]);
     header->audio_frame_sz = read32(&raw_header[0x30]);
     header->hres = read16(&raw_header[0x34]);
@@ -2003,20 +2005,15 @@ static void display_header(HVQM4_header *header)
     }
     printf("Header size: 0x%"PRIx32"\n", header->header_size);
     printf("Body size:   0x%"PRIx32"\n", header->body_size);
-    printf("Duration:    %"PRIu32" (?)\n", header->duration);
+    printf("Max frame:   0x%"PRIx32"\n", header->max_frame_sz);
     printf("Resolution:  %"PRIu32" x %"PRIu32"\n", header->hres, header->vres);
     printf("µs/frame:    %"PRIu32"\n", header->usec_per_frame);
-    printf("%d Blocks\n", header->blocks);
+    printf("%d GOPs\n", header->blocks);
     printf("%d Video frames\n", header->video_frames);
-    if (header->audio_frames)
-    {
-        printf("%d Audio frames\n", header->audio_frames);
-        printf("Sample rate: %"PRIu32" Hz\n", header->audio_srate);
-        printf("Audio frame size: 0x%"PRIx32"\n", header->audio_frame_sz);
-        printf("Audio channels: %u\n", header->audio_channels);
-    } else {
-        printf("No audio!\n");
-    }
+    printf("%d Audio frames\n", header->audio_frames);
+    printf("Sample rate: %"PRIu32" Hz\n", header->audio_srate);
+    printf("Audio frame size: 0x%"PRIx32"\n", header->audio_frame_sz);
+    printf("Audio channels: %u\n", header->audio_channels);
     printf("\n");
 }
 
@@ -2126,12 +2123,6 @@ int main(int argc, char **argv)
     load_header(&header, raw_header);
     display_header(&header);
 
-    if (header.audio_frames == 0)
-    {
-        fprintf(stderr, "this video contains no audio!\n");
-        exit(EXIT_FAILURE);
-    }
-
     /* open output */
     FILE *outfile = fopen(argv[2], "wb");
     if (!outfile)
@@ -2180,8 +2171,8 @@ int main(int argc, char **argv)
         expect32(ftell(infile) - last_block_start, infile);
         last_block_start = block_start;
         const uint32_t expected_block_size = get32(infile);
-        const uint32_t expected_aud_frame_count = get32(infile);
         const uint32_t expected_vid_frame_count = get32(infile);
+        const uint32_t expected_aud_frame_count = get32(infile);
         //expect32(0x01000000, infile);   /* EOS marker? */
         get32(infile);   /* EOS marker? */
         const long data_start = ftell(infile);
