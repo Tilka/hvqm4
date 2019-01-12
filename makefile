@@ -10,14 +10,14 @@ debug: build_emu
 	toolchain/bin/powerpc-linux-gdb -ex 'target remote localhost:1234' -ex c h4m_audio_decode
 
 native:
-	clang -m32 -Og -Wall -Wextra h4m_audio_decode.c -o h4m_audio_decode -DNATIVE=1 -fsanitize=address -g
+	clang -m32 -march=native -O2 -funroll-loops -Wall -Wextra h4m_audio_decode.c -o h4m_audio_decode -DNATIVE=1
 	rm -f output/*.ppm
-	./h4m_audio_decode samples/LOGOS.h4m foo.wav
+	time -p ./h4m_audio_decode samples/LOGOS.h4m foo.wav
 
 native64:
-	clang -O2 -funroll-loops -Wall -Wextra h4m_audio_decode.c -o h4m_audio_decode -DNATIVE=1
+	clang -march=native -O2 -funroll-loops -Wall -Wextra h4m_audio_decode.c -o h4m_audio_decode -DNATIVE=1
 	rm -f output/*.ppm
-	./h4m_audio_decode samples/LOGOS.h4m foo.wav
+	time -p ./h4m_audio_decode samples/LOGOS.h4m foo.wav
 
 
 clean:
