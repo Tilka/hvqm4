@@ -697,13 +697,14 @@ static void setHVQPlaneDesc(SeqObj *seqobj, uint8_t plane_idx, uint8_t h_samp, u
     plane->height_shift = v_samp == 2 ? 1 : 0;
     plane->height_in_samples = seqobj->height >> plane->height_shift;
     plane->size_in_samples = plane->width_in_samples * plane->height_in_samples;
+    // pixels per 2x2 block
     plane->h_samp_per_block = 2 >> plane->width_shift;
     plane->v_samp_per_block = 2 >> plane->height_shift;
     plane->block_size_in_samples = plane->h_samp_per_block * plane->v_samp_per_block;
     // number of 4x4 blocks
     plane->h_blocks = seqobj->width / (h_samp * 4);
     plane->v_blocks = seqobj->height / (v_samp * 4);
-    // number of 4x4 blocks + 2
+    // number of 4x4 blocks + border
     plane->h_blocks_safe = plane->h_blocks + 2;
     plane->v_blocks_safe = plane->v_blocks + 2;
     plane->some_half_array[0] = 0;
@@ -1404,11 +1405,11 @@ static void setMCDownBlk(MCPlane mcplanes[3])
 {
     for (int i = 0; i < 3; ++i)
     {
-        MCPlane *plane = &mcplanes[i];
-        plane->present += plane->v_unk28;
-        void *ptr = plane->payload_ptrC + plane->stride * 2;
-        plane->payload_ptr8 = ptr;
-        plane->payload_ptrC = ptr;
+        MCPlane *mcplane = &mcplanes[i];
+        mcplane->present += mcplane->v_unk28;
+        void *ptr = mcplane->payload_ptrC + mcplane->stride * 2;
+        mcplane->payload_ptr8 = ptr;
+        mcplane->payload_ptrC = ptr;
     }
 }
 
@@ -1623,11 +1624,11 @@ static void MCBlockDecMCNest(VideoState *state, MCPlane mcplanes[3], int32_t x, 
         {
             uint8_t *ptr = mcplane->payload_ptr8;
             uint8_t r25 = ptr[plane->some_half_array[i] * 2 + 1] & 0xF;
-            void *r24 = mcplane->top + plane->some_word_array[i];
+            void *dst = mcplane->top + plane->some_word_array[i];
             uint32_t stride = plane->width_in_samples;
             if (r25 == 6)
             {
-                OrgBlock(state, r24, stride, plane_idx);
+                OrgBlock(state, dst, stride, plane_idx);
             }
             else
             {
@@ -1636,12 +1637,12 @@ static void MCBlockDecMCNest(VideoState *state, MCPlane mcplanes[3], int32_t x, 
                 void *r20 = mcplane->target + (bar >> 1) * plane->width_in_samples + (foo >> 1) + plane->some_word_array[i];
                 if (r25 == 0)
                 {
-                    _MotionComp(r24, stride, r20, stride, foo & 1, bar & 1);
+                    _MotionComp(dst, stride, r20, stride, foo & 1, bar & 1);
                 }
                 else
                 {
                     uint32_t strideY = state->planes[0].width_in_samples;
-                    PrediAotBlock(state, r24, r20, stride, r25, target, strideY, plane_idx, foo & 1, bar & 1);
+                    PrediAotBlock(state, dst, r20, stride, r25, target, strideY, plane_idx, foo & 1, bar & 1);
                 }
             }
         }
