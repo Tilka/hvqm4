@@ -102,7 +102,7 @@ static void expect32_imm(uint32_t expected, uint32_t actual, unsigned long offse
     }
 }
 
-static void expect32_text(uint32_t expected, uint32_t actual, char *name)
+static void expect32_text(uint32_t expected, uint32_t actual, char const *name)
 {
     if (expected != actual)
     {
@@ -244,7 +244,7 @@ static uint8_t clipTable[0x200];
 static int32_t divTable[0x10];
 static int32_t mcdivTable[0x200];
 
-static void init_global_constants()
+static void init_global_constants(void)
 {
     for (int i = 0, j = -0x80; i < 0x200; ++i, ++j)
         clipTable[i] = j < 0 ? 0 : (j > 0xff ? 0xff : (j & 0xff));
@@ -256,7 +256,7 @@ static void init_global_constants()
         mcdivTable[i] = 0x1000 / i;
 }
 
-void HVQM4InitDecoder()
+static void HVQM4InitDecoder(void)
 {
     init_global_constants();
 }
@@ -431,14 +431,16 @@ typedef struct
     uint8_t video_mode;
 } VideoInfo;
 
-static void OrgBlock(VideoState *state, uint8_t *dst, uint32_t stride, uint32_t plane_idx)
+// copy into 4x4 block
+static void OrgBlock(VideoState *state, uint8_t *dst, uint32_t dst_stride, uint32_t plane_idx)
 {
     BitBuffer *buf = &state->buf0[plane_idx];
-    for (int i = 0; i < 4; ++i)
-        for (int j = 0; j < 4; ++j)
-            dst[i * stride + j] = *(uint8_t*)buf->ptr++;
+    for (int y = 0; y < 4; ++y)
+        for (int x = 0; x < 4; ++x)
+            dst[y * dst_stride + x] = *(uint8_t*)buf->ptr++;
 }
 
+// can use FFmpeg's get_bits1()/get_bits(..., 8) for this
 static int16_t getBit(BitBuffer *buf)
 {
     int32_t bit = buf->bit;
@@ -754,7 +756,8 @@ static void dumpRGB(Player *player, char const *path)
     uint8_t const *yp = player->present;
     uint8_t const *up = yp + w*h;
     uint8_t const *vp = up + w*h/4;
-    uint8_t rgb[h][w][3];
+    uint8_t *rgb = malloc(w * h * 3);
+    uint8_t *ptr = rgb;
     for (uint32_t i = 0; i < h; ++i)
     {
         for (uint32_t j = 0; j < w; ++j)
@@ -762,13 +765,14 @@ static void dumpRGB(Player *player, char const *path)
             float y = yp[i   * w   + j];
             float u = up[i/2 * w/2 + j/2];
             float v = vp[i/2 * w/2 + j/2];
-            rgb[i][j][0] = clamp255(y + 1.402*(v - 128));
-            rgb[i][j][1] = clamp255(y - 0.34414*(u - 128) - 0.71414*(v - 128));
-            rgb[i][j][2] = clamp255(y + 1.772*(u - 128));
+            *ptr++ = clamp255(y + 1.402*(v - 128));
+            *ptr++ = clamp255(y - 0.34414*(u - 128) - 0.71414*(v - 128));
+            *ptr++ = clamp255(y + 1.772*(u - 128));
         }
     }
     fwrite(rgb, w*h*3, 1, f);
     fclose(f);
+    free(rgb);
 }
 
 __attribute__((unused))
@@ -1548,7 +1552,7 @@ static void MCBlockDecDCNest(VideoState *state, MCPlane mcplanes[3])
 {
     for (int plane_idx = 0; plane_idx < 3; ++plane_idx)
     {
-        uint8_t *ptr = mcplanes[plane_idx].payload_ptr8;
+        uint8_t const *ptr = mcplanes[plane_idx].payload_ptr8;
         HVQPlaneDesc *plane = &state->planes[plane_idx];
         uint32_t stride = plane->width_in_samples;
         int32_t r26 = plane->h_blocks_safe;
@@ -1622,11 +1626,11 @@ static void MCBlockDecMCNest(VideoState *state, MCPlane mcplanes[3], int32_t x, 
         HVQPlaneDesc *plane = &state->planes[plane_idx];
         for (int i = 0; i < plane->block_size_in_samples; ++i)
         {
-            uint8_t *ptr = mcplane->payload_ptr8;
-            uint8_t r25 = ptr[plane->some_half_array[i] * 2 + 1] & 0xF;
+            uint8_t const *ptr = mcplane->payload_ptr8;
+            uint8_t block_type = ptr[plane->some_half_array[i] * 2 + 1] & 0xF;
             void *dst = mcplane->top + plane->some_word_array[i];
             uint32_t stride = plane->width_in_samples;
-            if (r25 == 6)
+            if (block_type == 6)
             {
                 OrgBlock(state, dst, stride, plane_idx);
             }
@@ -1634,15 +1638,15 @@ static void MCBlockDecMCNest(VideoState *state, MCPlane mcplanes[3], int32_t x, 
             {
                 int32_t foo = x >> plane->width_shift;
                 int32_t bar = y >> plane->height_shift;
-                void *r20 = mcplane->target + (bar >> 1) * plane->width_in_samples + (foo >> 1) + plane->some_word_array[i];
-                if (r25 == 0)
+                void const *src = mcplane->target + (bar >> 1) * plane->width_in_samples + (foo >> 1) + plane->some_word_array[i];
+                if (block_type == 0)
                 {
-                    _MotionComp(dst, stride, r20, stride, foo & 1, bar & 1);
+                    _MotionComp(dst, stride, src, stride, foo & 1, bar & 1);
                 }
                 else
                 {
                     uint32_t strideY = state->planes[0].width_in_samples;
-                    PrediAotBlock(state, dst, r20, stride, r25, target, strideY, plane_idx, foo & 1, bar & 1);
+                    PrediAotBlock(state, dst, src, stride, block_type, target, strideY, plane_idx, foo & 1, bar & 1);
                 }
             }
         }
@@ -1971,6 +1975,8 @@ static void display_header(HVQM4_header *header)
     printf("Body size:   0x%"PRIx32"\n", header->body_size);
     printf("Max frame:   0x%"PRIx32"\n", header->max_frame_sz);
     printf("Resolution:  %"PRIu32" x %"PRIu32"\n", header->hres, header->vres);
+    printf("Chroma subsampling: %u x %u\n", header->hsamp, header->vsamp);
+    printf("Video mode: %u\n", header->video_mode);
     printf("µs/frame:    %"PRIu32"\n", header->usec_per_frame);
     printf("%d GOPs\n", header->blocks);
     printf("%d Video frames\n", header->video_frames);
@@ -2057,6 +2063,7 @@ static void decv_init(Player *player)
     player->future  = malloc(picsize);
 }
 
+#ifndef HVQM4_NOMAIN
 int main(int argc, char **argv)
 {
     printf("h4m 'HVQM4 1.3/1.5' decoder 0.4 by flacs/hcs\n\n");
@@ -2263,3 +2270,4 @@ int main(int argc, char **argv)
 
     printf("Done!\n");
 }
+#endif
