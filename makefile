@@ -1,9 +1,10 @@
-#SAMPLE = samples/LOGOS.h4m
-SAMPLE = samples/pikminS.h4m
-REFERENCE = reference/
+MOVIE = LOGOS.h4m
+#MOVIE = pikminS.h4m
+SAMPLE = samples/$(MOVIE)
+REFERENCE = reference/$(MOVIE)
 
 build_emu:
-	LD_LIBRARY_PATH=toolchain/lib toolchain/bin/powerpc-linux-gcc -Wall -Wextra -Wno-unused-function -g -fno-omit-frame-pointer -static h4m_audio_decode.c -o h4m_audio_decode
+	LD_LIBRARY_PATH=toolchain/lib toolchain/bin/powerpc-linux-gcc -O2 -Wall -Wextra -Wno-unused-function -g -fno-omit-frame-pointer -static h4m_audio_decode.c -o h4m_audio_decode
 	rm -f output/*.ppm
 
 emu: build_emu
