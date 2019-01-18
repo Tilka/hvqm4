@@ -1162,9 +1162,9 @@ static void MotionComp(VideoState *state, MCPlane mcplanes[3], int32_t unk5, int
 typedef struct
 {
     uint32_t plane_idx;
-    void *ptr4;
-    void *ptr8;
-    void *ptrC;
+    uint8_t const *ptr4;
+    uint8_t const *ptr8;
+    uint8_t const *ptrC;
     uint8_t unk10;
     uint8_t unk11;
     uint8_t unk12;
@@ -1265,7 +1265,7 @@ static void IpicBlockDec(VideoState *state, void *present, uint32_t stride, Stac
 
 static void IpicLineDec(VideoState *state, void *present, uint32_t stride, StackState *stack_state, uint16_t h_blocks)
 {
-    uint8_t *ptr = stack_state->ptr8;
+    uint8_t const *ptr = stack_state->ptr8;
     stack_state->unk10 = ptr[0];
     stack_state->unk11 = ptr[1];
     stack_state->unk14 = ptr[0];
