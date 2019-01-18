@@ -2192,6 +2192,7 @@ int main(int argc, char **argv)
 #ifdef VERBOSE_PRINT
                 printf("0x%lx: audio frame %d/%d (%d) (%d samples)\n", (unsigned long)audio_started, (int)aud_frame_count, (int)expected_aud_frame_count, (int)total_aud_frames, samples);
 #endif
+#if 1
                 decode_audio(&audio_state, first_aud, samples, infile, outfile, header.audio_channels);
                 first_aud = 0;
                 long bytes_done_unto = ftell(infile) - audio_started;
@@ -2209,6 +2210,10 @@ int main(int argc, char **argv)
                         bytes_done_unto ++;
                     }
                 }
+#else
+                printf("skipping\n");
+                seek_past(frame_size - 4, infile);
+#endif
             }
             else
             {
