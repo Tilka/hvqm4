@@ -208,11 +208,7 @@ static void load_library(const char *lib_path)
 
     // patch function calls
 #define PATCH(x) yolo_patch(&lib, #x, x);
-    PATCH(GetMCAot1)
-    PATCH(GetMCAotSum)
-    PATCH(_MotionComp)
-    PATCH(decodeSOvfSym)
-    PATCH(decodeHuff)
+    // e.g.: PATCH(GetMCAot1)
 #undef PATCH
 
     yolo_close(&lib);
