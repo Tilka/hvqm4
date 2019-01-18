@@ -289,8 +289,8 @@ static void WeightImBlock(uint8_t *dst, uint32_t stride, uint8_t value, uint8_t 
      */
     int32_t tmb = top - bottom;
     int32_t lmr = left - right;
-    int32_t r29 = tmb + lmr;
-    int32_t r28 = tmb - lmr;
+    int32_t vph = tmb + lmr;
+    int32_t vmh = tmb - lmr;
 
     int32_t r27 = value << 1;
     int32_t r31 = (value << 3) + 4;
@@ -305,31 +305,46 @@ static void WeightImBlock(uint8_t *dst, uint32_t stride, uint8_t value, uint8_t 
     int32_t bmr = bottom - right;
     int32_t bml = bottom - left;
 
-    dst[0] = clipTable[((r29 + tpl + r31) >> 3) + 0x80];
-    dst[1] = clipTable[((r29 + tml + r31) >> 3) + 0x80];
-    dst[2] = clipTable[((r28 + tmr + r31) >> 3) + 0x80];
-    dst[3] = clipTable[((r28 + tpr + r31) >> 3) + 0x80];
+    // 6  8  8 6
+    // 8 10 10 8
+    // 8 10 10 8
+    // 6  8  8 6
+
+    // (6*V + 2*T - B + 2*L -   R + 4) / 8
+    // (8*V + 2*T - B       -   R + 4) / 8
+    // (8*V + 2*T - B -   L       + 4) / 8
+    // (6*V + 2*T - B -   L + 2*R + 4) / 8
+
+    dst[0] = clipTable[((vph + tpl + r31) >> 3) + 0x80];
+    dst[1] = clipTable[((vph + tml + r31) >> 3) + 0x80];
+    dst[2] = clipTable[((vmh + tmr + r31) >> 3) + 0x80];
+    dst[3] = clipTable[((vmh + tpr + r31) >> 3) + 0x80];
 
     dst += stride;
 
-    dst[0] = clipTable[((r31 + r29 - tml) >> 3) + 0x80];
+    // ( 8*V - B + 2*L -   R + 4) / 8
+    // (10*V - B       -   R + 4) / 8
+    // (10*V - B -   L       + 4) / 8
+    // ( 8*V - B -   L + 2*R + 4) / 8
+
+    dst[0] = clipTable[((r31 + vph - tml) >> 3) + 0x80];
     dst[1] = clipTable[((r31 - bpr      ) >> 3) + 0x80];
     dst[2] = clipTable[((r31 - bpl      ) >> 3) + 0x80];
-    dst[3] = clipTable[((r31 + r28 - tmr) >> 3) + 0x80];
+    dst[3] = clipTable[((r31 + vmh - tmr) >> 3) + 0x80];
 
     dst += stride;
 
-    dst[0] = clipTable[((r31 - r28 - bml) >> 3) + 0x80];
+    dst[0] = clipTable[((r31 - vmh - bml) >> 3) + 0x80];
     dst[1] = clipTable[((r31 - tpr      ) >> 3) + 0x80];
     dst[2] = clipTable[((r31 - tpl      ) >> 3) + 0x80];
-    dst[3] = clipTable[((r31 - r29 - bmr) >> 3) + 0x80];
+    dst[3] = clipTable[((r31 - vph - bmr) >> 3) + 0x80];
 
     dst += stride;
 
-    dst[0] = clipTable[((r31 - r28 + bpl) >> 3) + 0x80];
-    dst[1] = clipTable[((r31 - r28 + bml) >> 3) + 0x80];
-    dst[2] = clipTable[((r31 - r29 + bmr) >> 3) + 0x80];
-    dst[3] = clipTable[((r31 - r29 + bpr) >> 3) + 0x80];
+    dst[0] = clipTable[((r31 - vmh + bpl) >> 3) + 0x80];
+    dst[1] = clipTable[((r31 - vmh + bml) >> 3) + 0x80];
+    dst[2] = clipTable[((r31 - vph + bmr) >> 3) + 0x80];
+    dst[3] = clipTable[((r31 - vph + bpr) >> 3) + 0x80];
 }
 
 typedef struct
@@ -362,9 +377,15 @@ _Static_assert(sizeof(BitBufferWithTree) == 0x14, "sizeof(BitBufferWithTree) is 
 
 typedef struct
 {
+    uint8_t value;
+    uint8_t type;
+} BlockData;
+
+typedef struct
+{
     // size: 0x38 (56)
-    void *border; // 0-3 beginning of the plane including the border
-    void *payload; // 4-7 beginning of the non-border plane data
+    BlockData *border; // 0-3 beginning of the plane including the border
+    BlockData *payload; // 4-7 beginning of the non-border plane data
     uint16_t h_blocks; // 8-9
     uint16_t v_blocks; // A-B
     uint16_t h_blocks_safe; // C-D
@@ -809,10 +830,10 @@ static void dumpPlanes(VideoState *state, char const *prefix)
     }
 }
 
-static void set_border(uint8_t *dst)
+static void set_border(BlockData *dst)
 {
-    dst[0] = 0x7F;
-    dst[1] = 0xFF;
+    dst->value = 0x7F;
+    dst->type = 0xFF;
 }
 
 static void HVQM4SetBuffer(SeqObj *seqobj, void *workbuff)
@@ -859,27 +880,28 @@ static void HVQM4SetBuffer(SeqObj *seqobj, void *workbuff)
     state->bufTree4[0].tree = &state->trees[5];
     state->bufTree4[1].tree = &state->trees[5];
 
-    void *plane_data = workbuff + sizeof(VideoState);
+    BlockData *plane_data = workbuff + sizeof(VideoState);
     for (int i = 0; i < 3; ++i)
     {
         HVQPlaneDesc *plane = &state->planes[i];
         plane->border = plane_data;
-        uint32_t stride = plane->h_blocks_safe * sizeof(uint16_t);
-        plane->payload = plane_data + stride + 2;
-        plane_data += plane->h_blocks_safe * plane->v_blocks_safe * sizeof(uint16_t);
+        uint32_t stride = plane->h_blocks_safe;
+        // skip top border (stride) and left border (1)
+        plane->payload = plane_data + stride + 1;
+        plane_data += plane->h_blocks_safe * plane->v_blocks_safe;
 
         // set horizontal borders
-        void *ptr = plane->border;
+        BlockData *ptr = plane->border;
         for (uint32_t i = plane->h_blocks_safe; i; --i)
         {
             set_border(ptr);
-            ptr += sizeof(uint16_t);
+            ++ptr;
         }
 
         ptr = plane_data;
         for (uint32_t i = plane->h_blocks_safe; i; --i)
         {
-            ptr -= sizeof(uint16_t);
+            --ptr;
             set_border(ptr);
         }
 
@@ -891,7 +913,7 @@ static void HVQM4SetBuffer(SeqObj *seqobj, void *workbuff)
             ptr += stride;
         }
 
-        ptr = plane->border + stride * 2 - sizeof(uint16_t);
+        ptr = plane->border + stride * 2 - 1;
         for (uint32_t i = plane->v_blocks_safe - 2; i; --i)
         {
             set_border(ptr);
@@ -1021,7 +1043,7 @@ static void IpicDcvDec(VideoState *state)
 static void MakeNest(VideoState *state, uint16_t nest_x, uint16_t nest_y)
 {
     HVQPlaneDesc *y_plane = &state->planes[0];
-    uint8_t *ptr = y_plane->payload + (y_plane->h_blocks_safe * nest_y + nest_x) * 2;
+    uint8_t *ptr = y_plane->payload + y_plane->h_blocks_safe * nest_y + nest_x;
 
     int32_t v_empty, h_empty, v_nest_blocks, h_nest_blocks, v_mirror, h_mirror;
 
@@ -1237,12 +1259,6 @@ static void PrediAotBlock(VideoState *state, uint8_t *dst, uint8_t const *src, u
 
 typedef struct
 {
-    uint8_t value;
-    uint8_t type;
-} BlockData;
-
-typedef struct
-{
     uint32_t plane_idx;
     BlockData const *line_prev;
     BlockData const *line_curr;
@@ -1271,7 +1287,7 @@ static void IpicBlockDec(VideoState *state, uint8_t *dst, uint32_t stride, Stack
     else
     {
         IntraAotBlock(state, dst, stride, stack_state->curr.value, stack_state->curr.type, stack_state->plane_idx);
-        stack_state->value_prev = stack_state->next.value; // ?
+        stack_state->value_prev = stack_state->next.value; // ?!
     }
     // next block
     ++stack_state->line_prev;
@@ -1311,7 +1327,7 @@ static void IpicPlaneDec(VideoState *state, int plane_idx, uint8_t *dst)
     stack_state.plane_idx = plane_idx;
     stack_state.line_prev = plane->payload;
     stack_state.line_curr = plane->payload;
-    stack_state.line_next = plane->payload + plane->h_blocks_safe * sizeof(uint16_t);
+    stack_state.line_next = plane->payload + plane->h_blocks_safe;
     int16_t v_blocks = plane->v_blocks;
     // first line
     if (v_blocks > 0)
@@ -1572,29 +1588,29 @@ static void MCBlockDecDCNest(VideoState *state, MCPlane mcplanes[3])
         uint8_t const *ptr = mcplanes[plane_idx].payload_ptr8;
         HVQPlaneDesc *plane = &state->planes[plane_idx];
         uint32_t stride = plane->width_in_samples;
-        int32_t r26 = plane->h_blocks_safe;
+        int32_t line = plane->h_blocks_safe;
         for (int j = 0; j < plane->block_size_in_samples; ++j)
         {
             void *dst = mcplanes[plane_idx].top + plane->some_word_array[j];
             int32_t r30 = plane->some_half_array[j];
-            uint32_t r29 = ptr[r30 * 2];
-            uint32_t r23 = ptr[r30 * 2 + 1] & 0xF;
+            uint32_t value = ptr[r30 * 2];
+            uint32_t type = ptr[r30 * 2 + 1] & 0xF;
             // see also IpicBlockDec
-            if (r23 == 0)
+            if (type == 0)
             {
-                uint8_t top    = ptr[(r30 - r26) * 2 + 1] & 0x77 ? r29 : ptr[(r30 - r26) * 2];
-                uint8_t left   = ptr[(r30 -   1) * 2 + 1] & 0x77 ? r29 : ptr[(r30 -   1) * 2];
-                uint8_t right  = ptr[(r30 +   1) * 2 + 1] & 0x77 ? r29 : ptr[(r30 +   1) * 2];
-                uint8_t bottom = ptr[(r30 + r26) * 2 + 1] & 0x77 ? r29 : ptr[(r30 + r26) * 2];
-                WeightImBlock(dst, stride, r29, top, bottom, left, right);
+                uint8_t top    = ptr[(r30 - line) * 2 + 1] & 0x77 ? value : ptr[(r30 - line) * 2];
+                uint8_t left   = ptr[(r30 -   1) * 2 + 1] & 0x77 ? value : ptr[(r30 -   1) * 2];
+                uint8_t right  = ptr[(r30 +   1) * 2 + 1] & 0x77 ? value : ptr[(r30 +   1) * 2];
+                uint8_t bottom = ptr[(r30 + line) * 2 + 1] & 0x77 ? value : ptr[(r30 + line) * 2];
+                WeightImBlock(dst, stride, value, top, bottom, left, right);
             }
-            else if (r23 == 8)
+            else if (type == 8)
             {
-                dcBlock(dst, stride, r29);
+                dcBlock(dst, stride, value);
             }
             else
             {
-                IntraAotBlock(state, dst, stride, r29, r23, plane_idx);
+                IntraAotBlock(state, dst, stride, value, type, plane_idx);
             }
         }
     }
@@ -2156,7 +2172,8 @@ int main(int argc, char **argv)
     while (block_count < header.blocks)
     {
         const long block_start = ftell(infile);
-        expect32(ftell(infile) - last_block_start, infile);
+        //expect32(ftell(infile) - last_block_start, infile);
+        get32(infile);
         last_block_start = block_start;
         const uint32_t expected_block_size = get32(infile);
         const uint32_t expected_vid_frame_count = get32(infile);
