@@ -1241,11 +1241,9 @@ static void IpicBlockDec(VideoState *state, void *present, uint32_t stride, Stac
 {
     if (stack_state->block_type == 0)
     {
-        uint8_t const *ptr = stack_state->ptr4;
-        uint8_t r25 = ptr[1] & 0x77 ? stack_state->unk12 : ptr[0];
-        ptr = stack_state->ptrC;
-        uint8_t r24 = ptr[1] & 0x77 ? stack_state->unk12 : ptr[0];
-        uint8_t r23 = stack_state->unk11 & 0x77 ? stack_state->unk12 : stack_state->unk10;
+        uint8_t r25 = stack_state->ptr4[1] & 0x77 ? stack_state->unk12 : stack_state->ptr4[0];
+        uint8_t r24 = stack_state->ptrC[1] & 0x77 ? stack_state->unk12 : stack_state->ptrC[0];
+        uint8_t r23 = stack_state->unk11   & 0x77 ? stack_state->unk12 : stack_state->unk10;
         WeightImBlock(present, stride, stack_state->unk12, r25, r24, stack_state->unk14, r23);
         stack_state->unk14 = stack_state->unk12;
     }
