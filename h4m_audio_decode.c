@@ -765,9 +765,9 @@ static void dumpRGB(Player *player, char const *path)
             float y = yp[i   * w   + j];
             float u = up[i/2 * w/2 + j/2];
             float v = vp[i/2 * w/2 + j/2];
-            *ptr++ = clamp255(y + 1.402*(v - 128));
-            *ptr++ = clamp255(y - 0.34414*(u - 128) - 0.71414*(v - 128));
-            *ptr++ = clamp255(y + 1.772*(u - 128));
+            *ptr++ = clamp255(y + 1.402f*(v - 128.f));
+            *ptr++ = clamp255(y - 0.34414f*(u - 128.f) - 0.71414f*(v - 128.f));
+            *ptr++ = clamp255(y + 1.772f*(u - 128.f));
         }
     }
     fwrite(rgb, w*h*3, 1, f);
@@ -2144,18 +2144,18 @@ int main(int argc, char **argv)
         const uint32_t expected_block_size = get32(infile);
         const uint32_t expected_vid_frame_count = get32(infile);
         const uint32_t expected_aud_frame_count = get32(infile);
-        //expect32(0x01000000, infile);   /* EOS marker? */
-        get32(infile);   /* EOS marker? */
+        expect32(0x01000000, infile);   /* EOS marker? */
+        //get32(infile);   /* EOS marker? */
         const long data_start = ftell(infile);
 
         block_count ++;
 #ifdef VERBOSE_PRINT
-        printf("\n\nblock %d starts at 0x%lx, length 0x%"PRIx32"\n", (int)block_count, block_start, expected_block_size);
+        printf("\n\nblock %u/%u starts at 0x%lx, length 0x%"PRIx32"\n", (int)block_count, header.blocks, block_start, expected_block_size);
 #endif
 
         /* parse frames */
         struct audio_state audio_state;
-        int first_vid=1, first_aud=1;
+        int first_aud=1;
         uint32_t vid_frame_count = 0, aud_frame_count = 0;
         int block_sample_count =0;
 
@@ -2175,7 +2175,6 @@ int main(int argc, char **argv)
             if (frame_id1 == 1)
             {
                 /* video */
-                first_vid = 0;
                 vid_frame_count ++;
 #ifdef VERBOSE_PRINT
                 printf("video frame %d/%d\n", (int)vid_frame_count, (int)expected_vid_frame_count);
@@ -2185,15 +2184,15 @@ int main(int argc, char **argv)
             else if (frame_id1 == 0)
             {
                 /* audio */
-                const long audio_started = ftell(infile);
-                const uint32_t samples = get32(infile);
-                decode_audio(&audio_state, first_aud, samples, infile, outfile, header.audio_channels);
-                block_sample_count += samples;
                 aud_frame_count ++;
                 total_aud_frames ++;
+                const long audio_started = ftell(infile);
+                const uint32_t samples = get32(infile);
+                block_sample_count += samples;
 #ifdef VERBOSE_PRINT
                 printf("0x%lx: audio frame %d/%d (%d) (%d samples)\n", (unsigned long)audio_started, (int)aud_frame_count, (int)expected_aud_frame_count, (int)total_aud_frames, samples);
 #endif
+                decode_audio(&audio_state, first_aud, samples, infile, outfile, header.audio_channels);
                 first_aud = 0;
                 long bytes_done_unto = ftell(infile) - audio_started;
                 if (bytes_done_unto > frame_size)
