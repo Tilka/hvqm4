@@ -424,7 +424,7 @@ typedef struct
     HVQPlaneDesc planes[3]; // 0x00 - 0xA8
     Tree trees[6];
     BitBufferWithTree symbBuff[3];
-    BitBufferWithTree huffBuff[3];
+    BitBufferWithTree dc_rle[3];
     BitBufferWithTree bufTree0[3];
     BitBufferWithTree bufTree1[2];
     BitBufferWithTree bufTree2[2];
@@ -880,9 +880,9 @@ static void HVQM4SetBuffer(SeqObj *seqobj, void *workbuff)
     state->symbBuff[1].tree = &state->trees[0];
     state->symbBuff[2].tree = &state->trees[0];
 
-    state->huffBuff[0].tree = &state->trees[1]; // reuse!
-    state->huffBuff[1].tree = &state->trees[1]; //
-    state->huffBuff[2].tree = &state->trees[1]; //
+    state->dc_rle[0].tree = &state->trees[1]; // reuse!
+    state->dc_rle[1].tree = &state->trees[1]; //
+    state->dc_rle[2].tree = &state->trees[1]; //
 
     state->bufTree0[0].tree = &state->trees[2];
     state->bufTree0[1].tree = &state->trees[2];
@@ -936,18 +936,19 @@ static void HVQM4SetBuffer(SeqObj *seqobj, void *workbuff)
     }
 }
 
-static uint32_t getDeltaDC(VideoState *state, uint32_t plane_idx, uint32_t *ptr)
+static uint32_t getDeltaDC(VideoState *state, uint32_t plane_idx, uint32_t *rle_state)
 {
-    if (*ptr == 0)
+    if (*rle_state == 0)
     {
-        uint32_t symbol = decodeSOvfSym(&state->symbBuff[plane_idx], state->boundA, state->boundB);
-        if (symbol == 0)
-            *ptr = decodeHuff(&state->huffBuff[plane_idx]);
-        return symbol;
+        uint32_t delta = decodeSOvfSym(&state->symbBuff[plane_idx], state->boundA, state->boundB);
+        // successive zeroes are run-length encoded
+        if (delta == 0)
+            *rle_state = decodeHuff(&state->dc_rle[plane_idx]);
+        return delta;
     }
     else
     {
-        --(*ptr);
+        --*rle_state;
         return 0;
     }
 }
@@ -1029,26 +1030,31 @@ static void IpicDcvDec(VideoState *state)
     for (int plane_idx = 0; plane_idx < 3; ++plane_idx)
     {
         HVQPlaneDesc *plane = &state->planes[plane_idx];
-        uint32_t x = 0;
+        uint32_t rle_state = 0;
         uint32_t v_blocks = plane->v_blocks;
-        uint8_t *ptr = plane->payload;
+        BlockData *curr = plane->payload;
         while (v_blocks--)
         {
             // pointer to previous line
-            uint8_t const *ptr2 = ptr - plane->h_blocks_safe * sizeof(uint16_t);
-            uint32_t y = ptr2[0];
-            uint32_t h_blocks = plane->h_blocks;
-            while (h_blocks--)
+            BlockData const *prev = curr - plane->h_blocks_safe;
+            // first prediction on a line is only the previous line's value
+            uint8_t value = prev->value;
+            for (uint32_t i = 0; i < plane->h_blocks; ++i)
             {
-                y += getDeltaDC(state, plane_idx, &x);
-                y &= 0xff;
-                *ptr = y;
-                y = (ptr2[2] + y + 1) >> 1;
-                ptr += sizeof(uint16_t);
-                ptr2 += sizeof(uint16_t);
+                value += getDeltaDC(state, plane_idx, &rle_state);
+                curr->value = value;
+                ++curr;
+                ++prev;
+                // next prediction on this line is the mean of left and top values
+                // +---+---+
+                // |   | T |
+                // +---+---+
+                // | L | P |
+                // +---+---+
+                value = (value + prev->value + 1) / 2;
             }
-            // skip adjacent vertical borders
-            ptr += 2 * sizeof(uint16_t);
+            // skip right border of this line and left border of next line
+            curr += 2;
         }
         //dumpPlanes(state, "filled");
     }
@@ -1765,7 +1771,7 @@ static void HVQM4DecodeIpic(SeqObj *seqobj, uint8_t const *frame, void *present)
     }
     for (int i = 0; i < 3; ++i)
     {
-        setCode(&state->huffBuff[i].buf, data + read32(frame)); frame += 4;
+        setCode(&state->dc_rle[i].buf, data + read32(frame)); frame += 4;
     }
     readTree(&state->bufTree1[0], 0, 0);
     readTree(&state->bufTree2[0], 0, 0);
