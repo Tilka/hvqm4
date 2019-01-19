@@ -1,4 +1,5 @@
 MOVIE = LOGOS.h4m
+#MOVIE = PKLOGO.h4m
 #MOVIE = pikminS.h4m
 SAMPLE = samples/$(MOVIE)
 REFERENCE = reference/$(MOVIE)

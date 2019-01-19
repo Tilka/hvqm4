@@ -247,7 +247,7 @@ static int32_t mcdivTable[0x200];
 static void init_global_constants(void)
 {
     for (int i = 0, j = -0x80; i < 0x200; ++i, ++j)
-        clipTable[i] = j < 0 ? 0 : (j > 0xff ? 0xff : (j & 0xff));
+        clipTable[i] = j < 0 ? 0 : (j > 0xFF ? 0xFF : (j & 0xFF));
     divTable[0] = 0;
     mcdivTable[0] = 0;
     for (int i = 1; i < 0x10; ++i)
@@ -831,7 +831,7 @@ static void dumpPlanes(VideoState *state, char const *prefix)
         FILE *f = fopen(path, "wb+");
         HVQPlaneDesc *plane = &state->planes[plane_idx];
         fprintf(f, "P5\n%u %u\n255\n", plane->h_blocks_safe, plane->v_blocks_safe);
-        uint8_t const *p = plane->border;
+        uint8_t const *p = (uint8_t const*)plane->border;
         for (int i = 0; i < plane->v_blocks_safe; ++i)
         {
             for (int j = 0; j < plane->h_blocks_safe; ++j)
@@ -953,6 +953,7 @@ static uint32_t getDeltaDC(VideoState *state, uint32_t plane_idx, uint32_t *rle_
     }
 }
 
+// initialize a bit buffer
 static void setCode(BitBuffer *dst, void const *src)
 {
     dst->size = read32(src);
@@ -962,66 +963,67 @@ static void setCode(BitBuffer *dst, void const *src)
 
 static void Ipic_BasisNumDec(VideoState *state)
 {
-    uint8_t *y_dst = state->planes[0].payload;
+    BlockData *y_dst = state->planes[0].payload;
     uint32_t y_v_blocks = state->planes[0].v_blocks;
     BitBufferWithTree *y_tree1 = &state->bufTree1[0];
     BitBufferWithTree *y_tree2 = &state->bufTree2[0];
-    uint32_t value = 0;
+    uint32_t rle_state = 0;
     while (y_v_blocks--)
     {
         uint32_t y_h_blocks = state->planes[0].h_blocks;
         while (y_h_blocks--)
         {
-            if (value)
+            if (rle_state)
             {
-                y_dst[1] = 0;
-                y_dst += 2;
-                --value;
+                y_dst->type = 0;
+                ++y_dst;
+                --rle_state;
             }
             else
             {
-                int16_t x = decodeHuff(y_tree1) & 0xffff;
+                int16_t x = decodeHuff(y_tree1) & 0xFFFF;
                 if (x == 0)
-                    value = decodeHuff(y_tree2);
-                y_dst[1] = x & 0xff;
-                y_dst += 2;
+                    rle_state = decodeHuff(y_tree2);
+                y_dst->type = x & 0xFF;
+                ++y_dst;
             }
         }
-        y_dst += 4;
+        // skip borders
+        y_dst += 2;
     }
 
-    uint8_t *u_dst = state->planes[1].payload;
-    uint8_t *v_dst = state->planes[2].payload;
+    BlockData *u_dst = state->planes[1].payload;
+    BlockData *v_dst = state->planes[2].payload;
     uint32_t uv_v_blocks = state->planes[1].v_blocks;
     BitBufferWithTree *uv_tree1 = &state->bufTree1[1];
     BitBufferWithTree *uv_tree2 = &state->bufTree2[1];
-    value = 0;
+    rle_state = 0;
     while (uv_v_blocks--)
     {
         uint32_t uv_h_blocks = state->planes[1].h_blocks;
         while (uv_h_blocks--)
         {
-            if (value)
+            if (rle_state)
             {
-                u_dst[1] = 0;
-                v_dst[1] = 0;
-                u_dst += 2;
-                v_dst += 2;
-                --value;
+                u_dst->type = 0;
+                v_dst->type = 0;
+                ++u_dst;
+                ++v_dst;
+                --rle_state;
             }
             else
             {
-                int16_t x = decodeHuff(uv_tree1) & 0xffff;
-                if (x == 0)
-                    value = decodeHuff(uv_tree2);
-                u_dst[1] = (x >> 0) & 0xf;
-                v_dst[1] = (x >> 4) & 0xf;
-                u_dst += 2;
-                v_dst += 2;
+                int16_t value = decodeHuff(uv_tree1) & 0xFFFF;
+                if (value == 0)
+                    rle_state = decodeHuff(uv_tree2);
+                u_dst->type = (value >> 0) & 0xF;
+                v_dst->type = (value >> 4) & 0xF;
+                ++u_dst;
+                ++v_dst;
             }
         }
-        u_dst += 4;
-        v_dst += 4;
+        u_dst += 2;
+        v_dst += 2;
     }
 }
 
@@ -1063,7 +1065,7 @@ static void IpicDcvDec(VideoState *state)
 static void MakeNest(VideoState *state, uint16_t nest_x, uint16_t nest_y)
 {
     HVQPlaneDesc *y_plane = &state->planes[0];
-    uint8_t *ptr = y_plane->payload + y_plane->h_blocks_safe * nest_y + nest_x;
+    BlockData const *ptr = y_plane->payload + y_plane->h_blocks_safe * nest_y + nest_x;
 
     int32_t v_empty, h_empty, v_nest_blocks, h_nest_blocks, v_mirror, h_mirror;
 
@@ -1100,20 +1102,20 @@ static void MakeNest(VideoState *state, uint16_t nest_x, uint16_t nest_y)
     uint8_t *nest = state->nest_data;
     for (int i = 0; i < v_nest_blocks; ++i)
     {
-        uint8_t const *p = ptr;
+        BlockData const *p = ptr;
         for (int j = 0; j < h_nest_blocks; ++j)
         {
-            *nest++ = (p[0] >> 4) & 0xF;
-            p += 2;
+            *nest++ = (p->value >> 4) & 0xF;
+            ++p;
         }
         for (int j = 0; j < h_mirror; ++j)
         {
-            p -= 2;
-            *nest++ = (p[0] >> 4) & 0xF;
+            --p;
+            *nest++ = (p->value >> 4) & 0xF;
         }
         for (int j = 0; j < h_empty; ++j)
             *nest++ = 0;
-        ptr += y_plane->h_blocks_safe * sizeof(uint16_t);
+        ptr += y_plane->h_blocks_safe;
     }
 
     uint8_t const *nest2 = nest - state->h_nest_size;
@@ -1752,11 +1754,11 @@ static void BpicPlaneDec(SeqObj *seqobj, void *present, void *past, void *future
 static void HVQM4DecodeIpic(SeqObj *seqobj, uint8_t const *frame, void *present)
 {
     VideoState *state = seqobj->state;
-    uint8_t scale = frame[0];
-    state->unk_shift = frame[1];
-    uint16_t nest_x = read16(frame + 4);
-    uint16_t nest_y = read16(frame + 6);
-    frame += 8;
+    uint8_t scale = *frame++;
+    state->unk_shift = *frame++;
+    frame += 2; // unused, seems to be always zero
+    uint16_t nest_x = read16(frame); frame += 2;
+    uint16_t nest_y = read16(frame); frame += 2;
     uint8_t const *data = frame + 0x40;
     for (int i = 0; i < 2; ++i)
     {
