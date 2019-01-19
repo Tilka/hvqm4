@@ -305,10 +305,19 @@ static void WeightImBlock(uint8_t *dst, uint32_t stride, uint8_t value, uint8_t 
     int32_t bmr = bottom - right;
     int32_t bml = bottom - left;
 
+    // V:
     // 6  8  8 6
     // 8 10 10 8
     // 8 10 10 8
     // 6  8  8 6
+    //
+    // T:
+    //  2  2  2  2
+    //  0  0  0  0
+    // -1 -1 -1 -1
+    // -1 -1 -1 -1
+    //
+    // B/L/R: like T but rotated accordingly
 
     // (6*V + 2*T - B + 2*L -   R + 4) / 8
     // (8*V + 2*T - B       -   R + 4) / 8
@@ -334,6 +343,10 @@ static void WeightImBlock(uint8_t *dst, uint32_t stride, uint8_t value, uint8_t 
 
     dst += stride;
 
+    // ( 8*V - T + 2*L - R + 4) / 8
+    // (10*V - T       - R + 4) / 8
+    // (10*V - T - L
+
     dst[0] = clipTable[((r31 - vmh - bml) >> 3) + 0x80];
     dst[1] = clipTable[((r31 - tpr      ) >> 3) + 0x80];
     dst[2] = clipTable[((r31 - tpl      ) >> 3) + 0x80];
@@ -350,7 +363,7 @@ static void WeightImBlock(uint8_t *dst, uint32_t stride, uint8_t value, uint8_t 
 typedef struct
 {
     uint32_t pos;
-    int32_t tree_unk4;
+    int32_t root;
     uint32_t array0[0x200]; // 8+
     uint32_t array1[0x200]; // 0x808+
 } Tree;
@@ -514,6 +527,7 @@ static int16_t _readTree(Tree *dst, BitBuffer *src)
 {
     if (getBit(src) == 0)
     {
+        // leaf node
         int16_t byte = getByte(src);
         int16_t value = byte;
         if (readTree_signed && value > 0x7F)
@@ -524,6 +538,7 @@ static int16_t _readTree(Tree *dst, BitBuffer *src)
     }
     else
     {
+        // recurse
         uint32_t pos = dst->pos++;
         dst->array0[pos] = (uint32_t)_readTree(dst, src);
         dst->array1[pos] = (uint32_t)_readTree(dst, src);
@@ -538,18 +553,18 @@ static void readTree(BitBufferWithTree *buf, uint32_t isSigned, uint32_t scale)
     Tree *tree = buf->tree;
     tree->pos = 0x100;
     if (buf->buf.buf_unk4 == 0)
-        tree->tree_unk4 = 0;
+        tree->root = 0;
     else
-        tree->tree_unk4 = _readTree(tree, &buf->buf);
+        tree->root = _readTree(tree, &buf->buf);
 }
 
 static uint32_t decodeHuff(BitBufferWithTree *buf)
 {
     Tree *tree = buf->tree;
-    int32_t tree_unk4 = tree->tree_unk4;
-    while (tree_unk4 >= 0x100)
-        tree_unk4 = tree->array0[(getBit(&buf->buf) << 9) + tree_unk4];
-    return tree->array0[tree_unk4];
+    int32_t pos = tree->root;
+    while (pos >= 0x100)
+        pos = tree->array0[(getBit(&buf->buf) << 9) + pos];
+    return tree->array0[pos];
 }
 
 static int32_t decodeSOvfSym(BitBufferWithTree *buf, int32_t a, int32_t b)
