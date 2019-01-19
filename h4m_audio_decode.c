@@ -364,14 +364,13 @@ typedef struct
 {
     uint32_t pos;
     int32_t root;
-    uint32_t array0[0x200]; // 8+
-    uint32_t array1[0x200]; // 0x808+
+    uint32_t array[2][0x200];
 } Tree;
 
 typedef struct
 {
     void const *ptr;   // 0-3
-    uint32_t buf_unk4; // 4-7
+    uint32_t size; // 4-7
     uint32_t value;    // 8-B
     int32_t bit;       // C-F
 } BitBuffer;
@@ -533,15 +532,15 @@ static int16_t _readTree(Tree *dst, BitBuffer *src)
         if (readTree_signed && value > 0x7F)
             value -= 0x100;
         value <<= readTree_scale;
-        dst->array0[byte] = (uint32_t)value;
+        dst->array[0][byte] = (uint32_t)value;
         return byte;
     }
     else
     {
         // recurse
         uint32_t pos = dst->pos++;
-        dst->array0[pos] = (uint32_t)_readTree(dst, src);
-        dst->array1[pos] = (uint32_t)_readTree(dst, src);
+        dst->array[0][pos] = (uint32_t)_readTree(dst, src);
+        dst->array[1][pos] = (uint32_t)_readTree(dst, src);
         return (int16_t)pos;
     }
 }
@@ -552,7 +551,7 @@ static void readTree(BitBufferWithTree *buf, uint32_t isSigned, uint32_t scale)
     readTree_scale = scale;
     Tree *tree = buf->tree;
     tree->pos = 0x100;
-    if (buf->buf.buf_unk4 == 0)
+    if (buf->buf.size == 0)
         tree->root = 0;
     else
         tree->root = _readTree(tree, &buf->buf);
@@ -563,8 +562,8 @@ static uint32_t decodeHuff(BitBufferWithTree *buf)
     Tree *tree = buf->tree;
     int32_t pos = tree->root;
     while (pos >= 0x100)
-        pos = tree->array0[(getBit(&buf->buf) << 9) + pos];
-    return tree->array0[pos];
+        pos = tree->array[getBit(&buf->buf)][pos];
+    return tree->array[0][pos];
 }
 
 static int32_t decodeSOvfSym(BitBufferWithTree *buf, int32_t a, int32_t b)
@@ -955,8 +954,8 @@ static uint32_t getDeltaDC(VideoState *state, uint32_t plane_idx, uint32_t *ptr)
 
 static void setCode(BitBuffer *dst, void const *src)
 {
-    dst->buf_unk4 = read32(src);
-    dst->ptr = dst->buf_unk4 ? src + 4 : NULL;
+    dst->size = read32(src);
+    dst->ptr = dst->size ? src + 4 : NULL;
     dst->bit = -1;
 }
 
