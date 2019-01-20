@@ -240,14 +240,11 @@ static void decode_audio(struct audio_state *state, int first_aud, uint32_t samp
 
 /* video stuff */
 
-static uint8_t clipTable[0x200];
 static int32_t divTable[0x10];
 static int32_t mcdivTable[0x200];
 
 static void init_global_constants(void)
 {
-    for (int i = 0, j = -0x80; i < 0x200; ++i, ++j)
-        clipTable[i] = j < 0 ? 0 : (j > 0xFF ? 0xFF : (j & 0xFF));
     divTable[0] = 0;
     mcdivTable[0] = 0;
     for (int i = 1; i < 0x10; ++i)
@@ -264,14 +261,19 @@ static void HVQM4InitDecoder(void)
 // 4x4 block of single value
 static void dcBlock(uint8_t *dst, uint32_t stride, uint8_t value)
 {
-    for (int i = 0; i < 4; ++i)
-    {
-        dst[0] = value;
-        dst[1] = value;
-        dst[2] = value;
-        dst[3] = value;
-        dst += stride;
-    }
+    for (int y = 0; y < 4; ++y)
+        for (int x = 0; x < 4; ++x)
+            dst[y * stride + x] = value;
+}
+
+static uint8_t saturate(int32_t x)
+{
+    return x < 0 ? 0 : x > 0xFF ? 0xFF : x;
+}
+
+static uint8_t sat_mean8(uint32_t u)
+{
+    return saturate((u + 4) / 8);
 }
 
 static void WeightImBlock(uint8_t *dst, uint32_t stride, uint8_t value, uint8_t top, uint8_t bottom, uint8_t left, uint8_t right)
@@ -292,13 +294,13 @@ static void WeightImBlock(uint8_t *dst, uint32_t stride, uint8_t value, uint8_t 
     int32_t vph = tmb + lmr;
     int32_t vmh = tmb - lmr;
 
-    int32_t r27 = value << 1;
-    int32_t r31 = (value << 3) + 4;
+    int32_t v2 = value * 2;
+    int32_t v8 = value * 8;
 
-    int32_t tpl = (top    + left ) - r27;
-    int32_t tpr = (top    + right) - r27;
-    int32_t bpr = (bottom + right) - r27;
-    int32_t bpl = (bottom + left ) - r27;
+    int32_t tpl = (top    + left ) - v2;
+    int32_t tpr = (top    + right) - v2;
+    int32_t bpr = (bottom + right) - v2;
+    int32_t bpl = (bottom + left ) - v2;
 
     int32_t tml = top    - left;
     int32_t tmr = top    - right;
@@ -324,10 +326,10 @@ static void WeightImBlock(uint8_t *dst, uint32_t stride, uint8_t value, uint8_t 
     // (8*V + 2*T - B -   L       + 4) / 8
     // (6*V + 2*T - B -   L + 2*R + 4) / 8
 
-    dst[0] = clipTable[((vph + tpl + r31) >> 3) + 0x80];
-    dst[1] = clipTable[((vph + tml + r31) >> 3) + 0x80];
-    dst[2] = clipTable[((vmh + tmr + r31) >> 3) + 0x80];
-    dst[3] = clipTable[((vmh + tpr + r31) >> 3) + 0x80];
+    dst[0] = sat_mean8(vph + tpl + v8);
+    dst[1] = sat_mean8(vph + tml + v8);
+    dst[2] = sat_mean8(vmh + tmr + v8);
+    dst[3] = sat_mean8(vmh + tpr + v8);
 
     dst += stride;
 
@@ -336,10 +338,10 @@ static void WeightImBlock(uint8_t *dst, uint32_t stride, uint8_t value, uint8_t 
     // (10*V - B -   L       + 4) / 8
     // ( 8*V - B -   L + 2*R + 4) / 8
 
-    dst[0] = clipTable[((r31 + vph - tml) >> 3) + 0x80];
-    dst[1] = clipTable[((r31 - bpr      ) >> 3) + 0x80];
-    dst[2] = clipTable[((r31 - bpl      ) >> 3) + 0x80];
-    dst[3] = clipTable[((r31 + vmh - tmr) >> 3) + 0x80];
+    dst[0] = sat_mean8(v8 + vph - tml);
+    dst[1] = sat_mean8(v8 - bpr      );
+    dst[2] = sat_mean8(v8 - bpl      );
+    dst[3] = sat_mean8(v8 + vmh - tmr);
 
     dst += stride;
 
@@ -347,17 +349,17 @@ static void WeightImBlock(uint8_t *dst, uint32_t stride, uint8_t value, uint8_t 
     // (10*V - T       - R + 4) / 8
     // (10*V - T - L
 
-    dst[0] = clipTable[((r31 - vmh - bml) >> 3) + 0x80];
-    dst[1] = clipTable[((r31 - tpr      ) >> 3) + 0x80];
-    dst[2] = clipTable[((r31 - tpl      ) >> 3) + 0x80];
-    dst[3] = clipTable[((r31 - vph - bmr) >> 3) + 0x80];
+    dst[0] = sat_mean8(v8 - vmh - bml);
+    dst[1] = sat_mean8(v8 - tpr      );
+    dst[2] = sat_mean8(v8 - tpl      );
+    dst[3] = sat_mean8(v8 - vph - bmr);
 
     dst += stride;
 
-    dst[0] = clipTable[((r31 - vmh + bpl) >> 3) + 0x80];
-    dst[1] = clipTable[((r31 - vmh + bml) >> 3) + 0x80];
-    dst[2] = clipTable[((r31 - vph + bmr) >> 3) + 0x80];
-    dst[3] = clipTable[((r31 - vph + bpr) >> 3) + 0x80];
+    dst[0] = sat_mean8(v8 - vmh + bpl);
+    dst[1] = sat_mean8(v8 - vmh + bml);
+    dst[2] = sat_mean8(v8 - vph + bmr);
+    dst[3] = sat_mean8(v8 - vph + bpr);
 }
 
 typedef struct
@@ -1228,9 +1230,8 @@ static void IntraAotBlock(VideoState *state, uint8_t *dst, uint32_t stride, uint
     {
         for (int j = 0; j < 4; ++j)
         {
-            uint32_t address = ((result[i][j] + r30) >> state->unk_shift);
-            uint8_t byte = clipTable[address + 0x80];
-            dst[i * stride + j] = byte;
+            uint32_t value = ((result[i][j] + r30) >> state->unk_shift);
+            dst[i * stride + j] = saturate(value);
         }
     }
 }
@@ -1274,7 +1275,7 @@ static void PrediAotBlock(VideoState *state, uint8_t *dst, uint8_t const *src, u
         for (int j = 0; j < 4; ++j)
         {
             uint32_t value = (result[i][j] >> state->unk_shift) + mdst[i][j];
-            dst[i * stride + j] = clipTable[value + 0x80];
+            dst[i * stride + j] = saturate(value);
         }
     }
 }
