@@ -500,7 +500,7 @@ static int16_t getBit(BitBuffer *buf)
     return (buf->value >> bit) & 1;
 }
 
-static int16_t getByte(BitBuffer *buf)
+static uint8_t getByte(BitBuffer *buf)
 {
     uint32_t value = buf->value;
     int32_t bit = buf->bit;
@@ -529,19 +529,21 @@ static int16_t _readTree(Tree *dst, BitBuffer *src)
     if (getBit(src) == 0)
     {
         // leaf node
-        int16_t byte = getByte(src);
-        int16_t value = byte;
-        if (readTree_signed && value > 0x7F)
-            value -= 0x100;
-        value <<= readTree_scale;
-        dst->array[0][byte] = (uint32_t)value;
+        uint8_t byte = getByte(src);
+        uint32_t symbol = byte;
+        if (readTree_signed && byte > 0x7F)
+            symbol = (int8_t)byte;
+        symbol <<= readTree_scale;
+        dst->array[0][byte] = symbol;
         return byte;
     }
     else
     {
         // recurse
         uint32_t pos = dst->pos++;
+        // read the 0 side of the tree
         dst->array[0][pos] = (uint32_t)_readTree(dst, src);
+        // read the 1 side of the tree
         dst->array[1][pos] = (uint32_t)_readTree(dst, src);
         return (int16_t)pos;
     }
@@ -597,29 +599,29 @@ static uint32_t GetAotBasis(VideoState *state, uint8_t dst[4][4], int32_t *sum, 
     BitBuffer *buf = &state->buf0[plane_idx];
     uint16_t bits = read16(buf->ptr);
     buf->ptr += 2;
-    uint32_t step, stride;
+    uint32_t x_stride, y_stride;
     uint32_t big = bits & 0x3F;
     uint32_t small = (bits >> 6) & 0x1F;
     if (state->is_landscape)
     {
         nest_data += nest_stride * small + big;
-        step   =           1 << ((bits >> 11) & 1);
-        stride = nest_stride << ((bits >> 12) & 1);
+        x_stride =           1 << ((bits >> 11) & 1);
+        y_stride = nest_stride << ((bits >> 12) & 1);
     }
     else
     {
         nest_data += nest_stride * big + small;
-        step   =           1 << ((bits >> 12) & 1);
-        stride = nest_stride << ((bits >> 11) & 1);
+        x_stride =           1 << ((bits >> 12) & 1);
+        y_stride = nest_stride << ((bits >> 11) & 1);
     }
     uint8_t min = *nest_data;
     uint8_t max = *nest_data;
-    for (int i = 0; i < 4; ++i)
+    for (int y = 0; y < 4; ++y)
     {
-        for (int j = 0; j < 4; ++j)
+        for (int x = 0; x < 4; ++x)
         {
-            uint8_t nest_value = nest_data[i * stride + j * step];
-            dst[i][j] = nest_value;
+            uint8_t nest_value = nest_data[y * y_stride + x * x_stride];
+            dst[y][x] = nest_value;
             min = nest_value < min ? nest_value : min;
             max = nest_value > max ? nest_value : max;
         }
@@ -675,22 +677,22 @@ static uint32_t GetMCAotBasis(VideoState *state, uint8_t dst[4][4], int32_t *sum
 
 static int32_t GetAotSum(VideoState *state, int32_t result[4][4], uint8_t count, uint8_t const *nest_data, uint32_t nest_stride, uint32_t plane_idx)
 {
-    for (int i = 0; i < 4; ++i)
-        for (int j = 0; j < 4; ++j)
-            result[i][j] = 0;
+    for (int y = 0; y < 4; ++y)
+        for (int x = 0; x < 4; ++x)
+            result[y][x] = 0;
     uint8_t byte_result[4][4];
     int32_t temp = 0;
     for (int k = 0; k < count; ++k)
     {
         uint32_t factor = GetAotBasis(state, byte_result, &temp, nest_data, nest_stride, plane_idx);
-        for (int i = 0; i < 4; ++i)
-            for (int j = 0; j < 4; ++j)
-                result[i][j] += factor * byte_result[i][j];
+        for (int y = 0; y < 4; ++y)
+            for (int x = 0; x < 4; ++x)
+                result[y][x] += factor * byte_result[y][x];
     }
     int32_t sum = 0;
-    for (int i = 0; i < 4; ++i)
-        for (int j = 0; j < 4; ++j)
-            sum += result[i][j];
+    for (int y = 0; y < 4; ++y)
+        for (int x = 0; x < 4; ++x)
+            sum += result[y][x];
     return sum >> 4;
 }
 
@@ -1216,22 +1218,22 @@ static void MotionComp(VideoState *state, MCPlane mcplanes[3], int32_t unk5, int
     }
 }
 
-static void IntraAotBlock(VideoState *state, uint8_t *dst, uint32_t stride, uint8_t unk6, uint8_t block_type, uint32_t plane_idx)
+static void IntraAotBlock(VideoState *state, uint8_t *dst, uint32_t stride, uint8_t value, uint8_t block_type, uint32_t plane_idx)
 {
     if (block_type == 6)
     {
         OrgBlock(state, dst, stride, plane_idx);
         return;
     }
-    int32_t r30 = unk6 << state->unk_shift;
+    int32_t r30 = value << state->unk_shift;
     int32_t result[4][4];
     r30 -= GetAotSum(state, result, block_type, state->nest_data, state->h_nest_size, plane_idx);
-    for (int i = 0; i < 4; ++i)
+    for (int y = 0; y < 4; ++y)
     {
-        for (int j = 0; j < 4; ++j)
+        for (int x = 0; x < 4; ++x)
         {
-            uint32_t value = ((result[i][j] + r30) >> state->unk_shift);
-            dst[i * stride + j] = saturate(value);
+            uint32_t value = ((result[y][x] + r30) >> state->unk_shift);
+            dst[y * stride + x] = saturate(value);
         }
     }
 }
@@ -1246,19 +1248,19 @@ static void PrediAotBlock(VideoState *state, uint8_t *dst, uint8_t const *src, u
     uint8_t mdst[4][4];
     uint32_t const dst_stride = 4;
     _MotionComp(mdst, dst_stride, src, stride, foo, bar);
-    int32_t sum = 8;
-    for (int i = 0; i < 4; ++i)
-        for (int j = 0; j < 4; ++j)
-            sum += mdst[i][j];
-    sum /= 16;
+    int32_t mean = 8;
+    for (int y = 0; y < 4; ++y)
+        for (int x = 0; x < 4; ++x)
+            mean += mdst[y][x];
+    mean /= 16;
     int32_t diff[4][4];
     int32_t min, max;
-    min = max = mdst[0][0] - sum;
+    min = max = mdst[0][0] - mean;
     for (int i = 0; i < 4; ++i)
     {
         for (int j = 0; j < 4; ++j)
         {
-            int32_t value = diff[i][j] = mdst[i][j] - sum;
+            int32_t value = diff[i][j] = mdst[i][j] - mean;
             min = value < min ? value : min;
             max = value > max ? value : max;
         }
