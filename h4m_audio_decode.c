@@ -14,7 +14,7 @@ static void bla()
     exit(EXIT_FAILURE);
 }
 
-#define SYMBOLT(x, T) T (*p##x)() = bla;
+#define SYMBOLT(x, T) T (*p##x)() = (void*)bla;
 #include "symbols.inc"
 #undef SYMBOLT
 #endif

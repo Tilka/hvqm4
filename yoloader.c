@@ -99,9 +99,9 @@ void yolo_open(yolo_lib *lib, const char *path)
             continue;
 
         void *addr = (void*)phdr->p_vaddr;
-        size_t size = phdr->p_memsz;
         memcpy(addr, lib->f + phdr->p_offset, phdr->p_filesz);
 #if 0
+        size_t size = phdr->p_memsz;
         long page_size = sysconf(_SC_PAGESIZE);
         void *aligned_addr = (void*)((long)addr & ~(page_size - 1));
         size_t aligned_size = size + (addr - aligned_addr);
@@ -152,13 +152,12 @@ void *yolo_sym(yolo_lib *lib, const char *symbol)
 {
     size_t i = yolo_sym_index(lib, symbol);
     Elf32_Sym *sym = lib->f + lib->symtab->sh_offset + i * sizeof(Elf32_Sym);
-    return sym->st_value;
+    return (void*)sym->st_value;
 }
 
 // patch all references to symbol so that they point to target
 static void yolo_patch(yolo_lib *lib, const char *symbol, void *target)
 {
-    Elf32_Ehdr *ehdr = lib->f + lib->relatext->sh_offset;
     size_t sym_index = yolo_sym_index(lib, symbol);
     size_t rel_count = lib->relatext->sh_size / sizeof(Elf32_Rela);
     for (size_t i = 0; i < rel_count; ++i)
@@ -168,7 +167,7 @@ static void yolo_patch(yolo_lib *lib, const char *symbol, void *target)
         {
             printf("need to patch reference to %s at 0x%08X\n", symbol, rel->r_offset);
             uint32_t *ptr = (uint32_t*)rel->r_offset;
-            size_t diff = lib->trampolines - rel->r_offset;
+            size_t diff = (ptrdiff_t)lib->trampolines - rel->r_offset;
             if (diff > 0x3FFFFFF)
             {
                 show_mappings();
