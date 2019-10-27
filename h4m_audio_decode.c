@@ -372,7 +372,7 @@ typedef struct
 typedef struct
 {
     void const *ptr;   // 0-3
-    uint32_t size; // 4-7
+    uint32_t size;     // 4-7
     uint32_t value;    // 8-B
     int32_t bit;       // C-F
 } BitBuffer;
@@ -1624,8 +1624,8 @@ static void MCBlockDecDCNest(VideoState *state, MCPlane mcplanes[3])
             if (type == 0)
             {
                 uint8_t top    = ptr[(r30 - line) * 2 + 1] & 0x77 ? value : ptr[(r30 - line) * 2];
-                uint8_t left   = ptr[(r30 -   1) * 2 + 1] & 0x77 ? value : ptr[(r30 -   1) * 2];
-                uint8_t right  = ptr[(r30 +   1) * 2 + 1] & 0x77 ? value : ptr[(r30 +   1) * 2];
+                uint8_t left   = ptr[(r30 -    1) * 2 + 1] & 0x77 ? value : ptr[(r30 -    1) * 2];
+                uint8_t right  = ptr[(r30 +    1) * 2 + 1] & 0x77 ? value : ptr[(r30 +    1) * 2];
                 uint8_t bottom = ptr[(r30 + line) * 2 + 1] & 0x77 ? value : ptr[(r30 + line) * 2];
                 WeightImBlock(dst, stride, value, top, bottom, left, right);
             }
