@@ -1,15 +1,19 @@
-MOVIE = LOGOS.h4m
+#MOVIE = LOGOS.h4m
 #MOVIE = PKLOGO.h4m
 #MOVIE = pikminS.h4m
-SAMPLE = samples/$(MOVIE)
-REFERENCE = reference/$(MOVIE)
+#MOVIE = theix.h4m
+MOVIE = Treyarch_Logo.h4m
+#MOVIE = crap starfox.h4m
+SAMPLE = "samples/$(MOVIE)"
+REFERENCE = "reference/$(MOVIE)"
 
 build_emu:
-	LD_LIBRARY_PATH=toolchain/lib toolchain/bin/powerpc-linux-gcc -O2 -Wall -Wextra -Wno-unused-function -g -fno-omit-frame-pointer -static h4m_audio_decode.c -o h4m_audio_decode
+	LD_LIBRARY_PATH=toolchain/lib toolchain/bin/powerpc-linux-gcc -Og -Wall -Wextra -Wno-unused-function -g -fno-omit-frame-pointer -static h4m_audio_decode.c -o h4m_audio_decode
 	rm -f output/*.ppm
 
 emu: build_emu
 	qemu-ppc h4m_audio_decode $(SAMPLE) foo.wav
+	diff -q output/ $(REFERENCE)
 
 debug: build_emu
 	qemu-ppc -g 1234 h4m_audio_decode $(SAMPLE) foo.wav &
