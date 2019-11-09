@@ -145,12 +145,15 @@ size_t yolo_sym_index(yolo_lib *lib, const char *symbol)
             return i;
     }
     fprintf(stderr, "couldn't find symbol '%s'\n", symbol);
-    exit(EXIT_FAILURE);
+    //exit(EXIT_FAILURE);
+    return 0;
 }
 
 void *yolo_sym(yolo_lib *lib, const char *symbol)
 {
     size_t i = yolo_sym_index(lib, symbol);
+    if (!i)
+        return NULL;
     Elf32_Sym *sym = lib->f + lib->symtab->sh_offset + i * sizeof(Elf32_Sym);
     return (void*)sym->st_value;
 }
@@ -159,6 +162,11 @@ void *yolo_sym(yolo_lib *lib, const char *symbol)
 static void yolo_patch(yolo_lib *lib, const char *symbol, void *target)
 {
     size_t sym_index = yolo_sym_index(lib, symbol);
+    if (!sym_index)
+    {
+        fprintf(stderr, "failed to find relocation info for symbol '%s'\n", symbol);
+        return;
+    }
     size_t rel_count = lib->relatext->sh_size / sizeof(Elf32_Rela);
     for (size_t i = 0; i < rel_count; ++i)
     {

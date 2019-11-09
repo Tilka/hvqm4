@@ -5,7 +5,7 @@
 #include <string.h>
 #include <stddef.h>
 
-//#define VERSION_1_3
+#define VERSION_1_3
 
 // some things are per plane (luma, 2x chroma)
 #define PLANE_COUNT 3
@@ -377,7 +377,7 @@ typedef struct
     uint32_t pos;
     int32_t root;
 #ifdef VERSION_1_3
-    uint32_t array[2][0x100];
+    uint16_t array[2][0x200];
 #else
     uint32_t array[2][0x200];
 #endif
@@ -526,7 +526,15 @@ static void OrgBlock(VideoState *state, uint8_t *dst, uint32_t dst_stride, uint3
 static int16_t getBit(BitBuffer *buf)
 {
 #ifdef VERSION_1_3
-    return pgetBit(buf);
+    int32_t bit = buf->bit;
+    if (bit == 0)
+    {
+        buf->value = *(uint8_t const*)buf->ptr;
+        buf->ptr += 1;
+        bit = 0x80;
+    }
+    buf->bit = bit >> 1;
+    return buf->value & bit ? 1 : 0;
 #else
     int32_t bit = buf->bit;
     if (bit < 0)
@@ -544,7 +552,7 @@ static uint8_t getByte(BitBuffer *buf)
 {
 #ifdef VERSION_1_3
     uint8_t value = 0;
-    for (int i = 8; i >= 0; --i)
+    for (int i = 7; i >= 0; --i)
         value |= getBit(buf) << i;
 #else
     uint32_t value = buf->value;
@@ -576,7 +584,7 @@ static int16_t _readTree(Tree *dst, BitBuffer *src)
     {
         // leaf node
         uint8_t byte = getByte(src);
-        uint32_t symbol = byte;
+        int16_t symbol = byte;
         if (readTree_signed && byte > 0x7F)
             symbol = (int8_t)byte;
         symbol <<= readTree_scale;
@@ -2262,7 +2270,7 @@ int main(int argc, char **argv)
 
 #ifndef NATIVE
     if (header.version == HVQM4_13)
-        load_library("CubixGameCube.elf");
+        load_library("main.elf");
     else
         load_library("RM_DLL.elf");
     // native version doesn't init clip LUT
