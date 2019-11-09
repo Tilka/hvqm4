@@ -1030,22 +1030,17 @@ static uint32_t getDeltaDC(VideoState *state, uint32_t plane_idx, uint32_t *rle)
 }
 
 // initialize a bit buffer
+static void setCode(BitBuffer *dst, void const *src)
+{
+    dst->size = read32(src);
+    dst->ptr = dst->size ? src + 4 : NULL;
 #ifdef VERSION_1_3
-static void setCode(BitBuffer *dst, void const *src)
-{
-    dst->size = read32(src);
-    dst->ptr = dst->size ? src + 4 : NULL;
-    dst->unk4 = dst->size ? src + 4 : NULL;
+    dst->unk4 = dst->ptr;
     dst->bit = 0;
-}
 #else
-static void setCode(BitBuffer *dst, void const *src)
-{
-    dst->size = read32(src);
-    dst->ptr = dst->size ? src + 4 : NULL;
     dst->bit = -1;
-}
 #endif
+}
 
 static void Ipic_BasisNumDec(VideoState *state)
 {
