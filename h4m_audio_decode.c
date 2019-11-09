@@ -1290,7 +1290,12 @@ static void MotionComp(VideoState *state, MCPlane mcplanes[PLANE_COUNT], int32_t
                         plane->width_in_samples,
                         ptr + plane->some_word_array[j],
                         plane->width_in_samples,
-                        foo & 1, bar & 1);
+#ifdef VERSION_1_3
+                        unk5 & 1, unk6 & 1
+#else
+                        foo & 1, bar & 1
+#endif
+                        );
         }
     }
 }
@@ -1780,15 +1785,23 @@ static void MCBlockDecMCNest(VideoState *state, MCPlane mcplanes[PLANE_COUNT], i
             {
                 int32_t foo = x >> plane->width_shift;
                 int32_t bar = y >> plane->height_shift;
+#ifdef VERSION_1_3
+                uint32_t flag0 = x & 1;
+                uint32_t flag1 = y & 1;
+#else
+                uint32_t flag0 = foo & 1;
+                uint32_t flag1 = bar & 1;
+#endif
                 void const *src = mcplane->target + (bar >> 1) * plane->width_in_samples + (foo >> 1) + plane->some_word_array[i];
                 if (block_type == 0)
                 {
-                    _MotionComp(dst, stride, src, stride, foo & 1, bar & 1);
+                    _MotionComp(dst, stride, src, stride, flag0, flag1);
+                    _MotionComp(dst, stride, src, stride, flag0, flag1);
                 }
                 else
                 {
                     uint32_t strideY = state->planes[0].width_in_samples;
-                    PrediAotBlock(state, dst, src, stride, block_type, target, strideY, plane_idx, foo & 1, bar & 1);
+                    PrediAotBlock(state, dst, src, stride, block_type, target, strideY, plane_idx, flag0, flag1);
                 }
             }
         }
