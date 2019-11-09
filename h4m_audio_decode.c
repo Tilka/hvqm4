@@ -468,20 +468,32 @@ typedef struct
     uint16_t h_nest_size;
     uint16_t v_nest_size;
     uint8_t is_landscape; // FIXME: check what happens for square video
-    uint8_t nest_data[70 * 38]; // 0x6261
+    uint8_t nest_data[70 * 38]; // 1.3: 0x3261 1.5: 0x6261
+#ifdef VERSION_1_3
+    uint8_t padding;
+    uint16_t boundB; // 0x3CC6
+    uint16_t boundA; // 0x3CC8
+#else
     uint8_t padding[3];
     uint32_t boundB; // 0x6CC8
     uint32_t boundA; // 0x6CCC
-    uint8_t unk_shift; // 0x6CD0
+#endif
+    uint8_t unk_shift; // 1.3: 0x3CCA 1.5: 0x6CD0
     uint8_t unk6CD1; // 0x6CD1
     uint8_t unk6CD2[2]; // 0x6CD2
     uint8_t unk6CD4[2]; // 0x6CD4
+#ifndef VERSION_1_3
     uint8_t maybe_padding[2]; // 0x6CD6-0x6CD7
+#endif
 } VideoState;
 #ifndef NATIVE
 #ifdef VERSION_1_3
-_Static_assert(sizeof(VideoState) == 0x3CD8, "sizeof(VideoState) is incorrect");
+_Static_assert(offsetof(VideoState, boundB) == 0x3CC6, "");
+_Static_assert(offsetof(VideoState, unk_shift) == 0x3CCA, "");
+_Static_assert(sizeof(VideoState) == 0x3CD0, "sizeof(VideoState) is incorrect");
 #else
+_Static_assert(offsetof(VideoState, boundB) == 0x6CC8, "");
+_Static_assert(offsetof(VideoState, unk_shift) == 0x6CD0, "");
 _Static_assert(sizeof(VideoState) == 0x6CD8, "sizeof(VideoState) is incorrect");
 #endif
 #endif
