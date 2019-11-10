@@ -5,7 +5,16 @@
 #include <string.h>
 #include <stddef.h>
 
-#define VERSION_1_3
+// ABI compatibility with HVQM4 1.3 is still kinda broken,
+// but native decoding is bit-perfect *shrug*
+// 1.5 increased the size of some fields from 16 to 32 bits
+// and added per-plane motion vector modes
+
+// define this to be ABI compatible with most HVQM4 1.3 binaries
+//#define VERSION_1_3
+
+// define this to be ABI compatible with Frogger Beyond
+//#define FROGGER
 
 // some things are per plane (luma, 2x chroma)
 #define PLANE_COUNT 3
@@ -376,14 +385,14 @@ typedef struct
 {
     uint32_t pos;
     int32_t root;
-#ifdef VERSION_1_3
+#if defined(VERSION_1_3) && !defined(FROGGER)
     uint16_t array[2][0x200];
 #else
     uint32_t array[2][0x200];
 #endif
 } Tree;
 #ifndef NATIVE
-#ifdef VERSION_1_3
+#if defined(VERSION_1_3) && !defined(FROGGER)
 _Static_assert(sizeof(Tree) == 0x808, "sizeof(Tree) is incorrect");
 #else
 _Static_assert(sizeof(Tree) == 0x1008, "sizeof(Tree) is incorrect");
@@ -392,9 +401,9 @@ _Static_assert(sizeof(Tree) == 0x1008, "sizeof(Tree) is incorrect");
 
 typedef struct
 {
-#ifdef VERSION_1_3
+#if defined(VERSION_1_3) && !defined(FROGGER)
     void const *ptr;  // 0-3
-    void const *unk4;  // 4-7
+    void const *start;  // 4-7 seems to be unused which is probably why it was removed in 1.5
     uint32_t size;     // 8-B
     uint8_t value;     // C
     uint8_t bit;       // D
@@ -469,7 +478,7 @@ typedef struct
     uint16_t v_nest_size;
     uint8_t is_landscape; // FIXME: check what happens for square video
     uint8_t nest_data[70 * 38]; // 1.3: 0x3261 1.5: 0x6261
-#ifdef VERSION_1_3
+#if defined(VERSION_1_3) && !defined(FROGGER)
     uint8_t padding;
     uint16_t boundB; // 0x3CC6
     uint16_t boundA; // 0x3CC8
@@ -482,12 +491,12 @@ typedef struct
     uint8_t unk6CD1; // 0x6CD1
     uint8_t unk6CD2[2]; // 0x6CD2
     uint8_t unk6CD4[2]; // 0x6CD4
-#ifndef VERSION_1_3
+#if !defined(VERSION_1_3) || defined(FROGGER)
     uint8_t maybe_padding[2]; // 0x6CD6-0x6CD7
 #endif
 } VideoState;
 #ifndef NATIVE
-#ifdef VERSION_1_3
+#if defined(VERSION_1_3) && !defined(FROGGER)
 _Static_assert(offsetof(VideoState, boundB) == 0x3CC6, "");
 _Static_assert(offsetof(VideoState, unk_shift) == 0x3CCA, "");
 _Static_assert(sizeof(VideoState) == 0x3CD0, "sizeof(VideoState) is incorrect");
@@ -500,11 +509,11 @@ _Static_assert(sizeof(VideoState) == 0x6CD8, "sizeof(VideoState) is incorrect");
 
 typedef struct
 {
-    VideoState *state;
-    uint16_t width;
-    uint16_t height;
-    uint8_t h_samp;
-    uint8_t v_samp;
+    VideoState *state; // 0-3
+    uint16_t width; // 4-5
+    uint16_t height; // 6-7
+    uint8_t h_samp; // 8
+    uint8_t v_samp; // 9
     uint16_t unkA; // unused?
 } SeqObj;
 
@@ -537,7 +546,7 @@ static void OrgBlock(VideoState *state, uint8_t *dst, uint32_t dst_stride, uint3
 // can use FFmpeg's get_bits1()/get_bits(..., 8) for this
 static int16_t getBit(BitBuffer *buf)
 {
-#ifdef VERSION_1_3
+#if defined(VERSION_1_3) && !defined(FROGGER)
     int32_t bit = buf->bit;
     if (bit == 0)
     {
@@ -562,7 +571,7 @@ static int16_t getBit(BitBuffer *buf)
 
 static uint8_t getByte(BitBuffer *buf)
 {
-#ifdef VERSION_1_3
+#if defined(VERSION_1_3) && !defined(FROGGER)
     uint8_t value = 0;
     for (int i = 7; i >= 0; --i)
         value |= getBit(buf) << i;
@@ -1034,8 +1043,8 @@ static void setCode(BitBuffer *dst, void const *src)
 {
     dst->size = read32(src);
     dst->ptr = dst->size ? src + 4 : NULL;
-#ifdef VERSION_1_3
-    dst->unk4 = dst->ptr;
+#if defined(VERSION_1_3) && !defined(FROGGER)
+    dst->start = dst->ptr;
     dst->bit = 0;
 #else
     dst->bit = -1;
@@ -1258,13 +1267,13 @@ typedef struct
 {
     uint32_t rle; // init 0
     uint32_t pb_dc; // init 0x7F
-    void *payload_ptr8;
-    void *payload_ptrC;
-    void *present;
-    void *top;
-    void *target;
-    void *past;
-    void *future;
+    void *payload_ptr8; // 8
+    void *payload_ptrC; // 0xC
+    void *present; // 0x10
+    void *top; // 0x14
+    void *target; // 0x18
+    void *past; // 0x1C
+    void *future; // 0x20
     uint16_t h_unk24;
     uint16_t padding; // ?
     uint32_t v_unk28;
@@ -1277,12 +1286,21 @@ _Static_assert(sizeof(MCPlane) == 0x34, "sizeof(MCPlane) is wrong");
 
 static void MotionComp(VideoState *state, MCPlane mcplanes[PLANE_COUNT], int32_t unk5, int32_t unk6)
 {
+    uint32_t flag0 = unk5 & 1;
+    uint32_t flag1 = unk6 & 1;
     for (int i = 0; i < PLANE_COUNT; ++i)
     {
         MCPlane *mcplane = &mcplanes[i];
         HVQPlaneDesc *plane = &state->planes[i];
         int32_t foo = unk5 >> plane->width_shift;
         int32_t bar = unk6 >> plane->height_shift;
+#ifndef VERSION_1_3
+        if (state->padding[0])
+        {
+            flag0 = foo & 1;
+            flag1 = bar & 1;
+        }
+#endif
         void *ptr = mcplane->target + (bar >> 1) * plane->width_in_samples + (foo >> 1);
         for (int j = 0; j < plane->block_size_in_samples; ++j)
         {
@@ -1290,12 +1308,8 @@ static void MotionComp(VideoState *state, MCPlane mcplanes[PLANE_COUNT], int32_t
                         plane->width_in_samples,
                         ptr + plane->some_word_array[j],
                         plane->width_in_samples,
-#ifdef VERSION_1_3
-                        unk5 & 1, unk6 & 1
-#else
-                        foo & 1, bar & 1
-#endif
-                        );
+                        flag0,
+                        flag1);
         }
     }
 }
@@ -1767,6 +1781,8 @@ static void getMVector(int32_t *result, BitBufferWithTree *buf, int32_t bits)
 static void MCBlockDecMCNest(VideoState *state, MCPlane mcplanes[PLANE_COUNT], int32_t x, int32_t y)
 {
     void *target = mcplanes[0].target + x/2 + (y/2 - 16)*state->planes[0].width_in_samples - 32;
+    uint32_t flag0 = x & 1;
+    uint32_t flag1 = y & 1;
     for (int plane_idx = 0; plane_idx < PLANE_COUNT; ++plane_idx)
     {
         MCPlane *mcplane = &mcplanes[plane_idx];
@@ -1785,12 +1801,12 @@ static void MCBlockDecMCNest(VideoState *state, MCPlane mcplanes[PLANE_COUNT], i
             {
                 int32_t foo = x >> plane->width_shift;
                 int32_t bar = y >> plane->height_shift;
-#ifdef VERSION_1_3
-                uint32_t flag0 = x & 1;
-                uint32_t flag1 = y & 1;
-#else
-                uint32_t flag0 = foo & 1;
-                uint32_t flag1 = bar & 1;
+#ifndef VERSION_1_3
+                if (state->padding[0])
+                {
+                    flag0 = foo & 1;
+                    flag1 = bar & 1;
+                }
 #endif
                 void const *src = mcplane->target + (bar >> 1) * plane->width_in_samples + (foo >> 1) + plane->some_word_array[i];
                 if (block_type == 0)
@@ -1890,14 +1906,10 @@ static void HVQM4DecodeIpic(SeqObj *seqobj, uint8_t const *frame, void *present)
     state->boundB = +0x7F << scale;
     state->boundA = -0x80 << scale;
 
-    //puts("Ipic_BasisNumDec");
     Ipic_BasisNumDec(state);
-    //puts("IpicDcvDec");
     IpicDcvDec(state);
-    //puts("MakeNest");
     MakeNest(state, nest_x, nest_y);
 
-    //puts("IpicPlaneDec");
     for (int i = 0; i < PLANE_COUNT; ++i)
     {
         IpicPlaneDec(state, i, present);
@@ -2289,7 +2301,7 @@ int main(int argc, char **argv)
 
 #ifndef NATIVE
     if (header.version == HVQM4_13)
-        load_library("main.elf");
+        load_library("Frogger.elf");
     else
         load_library("RM_DLL.elf");
     // native version doesn't init clip LUT
@@ -2301,6 +2313,10 @@ int main(int argc, char **argv)
     Player player;
     HVQM4InitSeqObj(&player.seqobj, (VideoInfo*)&header.hres);
     VideoState *state = malloc(HVQM4BuffSize(&player.seqobj));
+#ifndef VERSION_1_3
+    // HACK to handle both 1.3 and 1.5
+    state->padding[0] = header.version == HVQM4_15;
+#endif
     HVQM4SetBuffer(&player.seqobj, state);
     decv_init(&player);
 

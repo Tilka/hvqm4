@@ -173,7 +173,7 @@ static void yolo_patch(yolo_lib *lib, const char *symbol, void *target)
         Elf32_Rela *rel = lib->f + lib->relatext->sh_offset + i * sizeof(Elf32_Rela);
         if (ELF32_R_SYM(rel->r_info) == sym_index)
         {
-            printf("need to patch reference to %s at 0x%08X\n", symbol, rel->r_offset);
+            printf("patching reference to %s at 0x%08X\n", symbol, rel->r_offset);
             uint32_t *ptr = (uint32_t*)rel->r_offset;
             size_t diff = (ptrdiff_t)lib->trampolines - rel->r_offset;
             if (diff > 0x3FFFFFF)
@@ -216,6 +216,70 @@ static void load_library(const char *lib_path)
     // patch function calls
 #define PATCH(x) yolo_patch(&lib, #x, x);
     // e.g.: PATCH(GetMCAot1)
+
+    // Frogger
+    /*
+    PATCH(HVQM4InitDecoder) // ok
+    PATCH(HVQM4InitSeqObj) // ok
+    PATCH(HVQM4BuffSize) // ok
+    PATCH(HVQM4SetBuffer) // ok
+    PATCH(HVQM4DecodeIpic)
+    PATCH(HVQM4DecodePpic)
+    PATCH(HVQM4DecodeBpic)
+    //PATCH(setCode) // not found
+    //PATCH(readTree) // not found
+    PATCH(Ipic_BasisNumDec) // ok
+    PATCH(IpicDcvDec) // ok
+    PATCH(MakeNest) // ok
+    PATCH(IpicPlaneDec) // ok
+    PATCH(BpicPlaneDec) // ok without MCNest
+    //PATCH(_readTree) // crash
+    PATCH(decodeHuff) // ok
+    //PATCH(getDeltaDC) // not found
+    PATCH(IpicLineDec) // ok
+    PATCH(initMCHandler) // ok
+    PATCH(spread_PB_descMap) // ok
+    //PATCH(resetMCHandler) // not found
+    //PATCH(setMCTop) // not found
+    PATCH(MCBlockDecDCNest) // ok
+    //PATCH(setMCTarget) // not found
+    //PATCH(getMVector) // not found
+    //PATCH(MCBlockDecMCNest) // diff
+    PATCH(MotionComp) // ok
+    //PATCH(setMCNextBlk) // not found
+    //PATCH(setMCDownBlk) // not found
+    PATCH(getBit) // ok
+    PATCH(getByte) // ok
+    //PATCH(decodeSOvfSym) // not found
+    PATCH(IpicBlockDec) // ok
+    //PATCH(initMCBproc) // not found
+    //PATCH(initMCBtype) // not found
+    //PATCH(getMCBtype) // not found
+    //PATCH(decode_PB_dc) // not found
+    PATCH(decode_PB_cc) // ok
+    //PATCH(reset_PB_dc) // not found
+    //PATCH(getMCBproc) // not found
+    //PATCH(_setMCTop) // unimplemented
+    PATCH(WeightImBlock) // ok
+    //PATCH(dcBlock) // not found
+    PATCH(IntraAotBlock) // ok
+    PATCH(OrgBlock) // ok
+    //PATCH(_MotionComp) // ok
+    //PATCH(PrediAotBlock) // diff
+    //PATCH(_setMCNextBlk) // not implemented
+    //PATCH(_setMCDownBlk) // not implemented
+    //PATCH(decodeUOvfSym) // not found
+    //PATCH(GetAot1) // unimplemented
+    //PATCH(GetAotSum) // ok/not found
+    PATCH(_MotionComp_11) // ok
+    PATCH(_MotionComp_01) // ok
+    PATCH(_MotionComp_10) // ok
+    PATCH(_MotionComp_00) // ok
+    //PATCH(GetMCAot1) // unimplemented
+    //PATCH(GetMCAotSum) // ok/not found
+    PATCH(GetAotBasis) // ok
+    PATCH(GetMCAotBasis) // ok
+    */
 #undef PATCH
 
     yolo_close(&lib);
