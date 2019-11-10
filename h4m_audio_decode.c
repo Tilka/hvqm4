@@ -1796,7 +1796,6 @@ static void MCBlockDecMCNest(VideoState *state, MCPlane mcplanes[PLANE_COUNT], i
                 if (block_type == 0)
                 {
                     _MotionComp(dst, stride, src, stride, flag0, flag1);
-                    _MotionComp(dst, stride, src, stride, flag0, flag1);
                 }
                 else
                 {
