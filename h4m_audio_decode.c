@@ -345,10 +345,10 @@ static void WeightImBlock(uint8_t *dst, uint32_t stride, uint8_t value, uint8_t 
     // (8*V + 2*T - B -   L       + 4) / 8
     // (6*V + 2*T - B -   L + 2*R + 4) / 8
 
-    dst[0] = sat_mean8(vph + tpl + v8);
-    dst[1] = sat_mean8(vph + tml + v8);
-    dst[2] = sat_mean8(vmh + tmr + v8);
-    dst[3] = sat_mean8(vmh + tpr + v8);
+    dst[0] = sat_mean8(v8 + vph + tpl);
+    dst[1] = sat_mean8(v8 + vph + tml);
+    dst[2] = sat_mean8(v8 + vmh + tmr);
+    dst[3] = sat_mean8(v8 + vmh + tpr);
 
     dst += stride;
 
@@ -467,9 +467,9 @@ typedef struct
     BitBufferWithTree dc_values[PLANE_COUNT]; // DC values
     BitBufferWithTree dc_rle[PLANE_COUNT]; // DC run lengths
     BitBufferWithTree bufTree0[PLANE_COUNT];
-    BitBufferWithTree bufTree1[LUMA_CHROMA];
-    BitBufferWithTree bufTree1_rle[LUMA_CHROMA];
-    BitBuffer buf0[PLANE_COUNT]; // high-entropy data
+    BitBufferWithTree basis_num[LUMA_CHROMA];
+    BitBufferWithTree basis_num_run[LUMA_CHROMA];
+    BitBuffer fixvl[PLANE_COUNT]; // high-entropy data
     BitBufferWithTree mv_h; // horizontal motion vectors
     BitBufferWithTree mv_v; // vertical motion vectors
     BitBufferWithTree mcb_proc; // macroblock proc
@@ -537,7 +537,7 @@ typedef struct
 // copy uncompressed 4x4 block
 static void OrgBlock(VideoState *state, uint8_t *dst, uint32_t dst_stride, uint32_t plane_idx)
 {
-    BitBuffer *buf = &state->buf0[plane_idx];
+    BitBuffer *buf = &state->fixvl[plane_idx];
     for (int y = 0; y < 4; ++y)
         for (int x = 0; x < 4; ++x)
             dst[y * dst_stride + x] = *(uint8_t*)buf->ptr++;
@@ -671,7 +671,7 @@ static int32_t decodeUOvfSym(BitBufferWithTree *buf, int32_t cmp_value)
 
 static uint32_t GetAotBasis(VideoState *state, uint8_t dst[4][4], int32_t *sum, uint8_t const *nest_data, uint32_t nest_stride, uint32_t plane_idx)
 {
-    BitBuffer *buf = &state->buf0[plane_idx];
+    BitBuffer *buf = &state->fixvl[plane_idx];
     // 0x003F: big      : 6
     // 0x07C0: small    : 5
     // 0x0800: x stride : 1
@@ -718,7 +718,7 @@ static uint32_t GetAotBasis(VideoState *state, uint8_t dst[4][4], int32_t *sum, 
 static uint32_t GetMCAotBasis(VideoState *state, uint8_t dst[4][4], int32_t *sum, uint8_t const *nest_data, uint32_t nest_stride, uint32_t plane_idx)
 {
     // the only difference to GetAotBasis() seems to be the ">> 4 & 0xF"
-    BitBuffer *buf = &state->buf0[plane_idx];
+    BitBuffer *buf = &state->fixvl[plane_idx];
     uint16_t bits = read16(buf->ptr);
     buf->ptr += 2;
     uint32_t step, stride;
@@ -955,11 +955,11 @@ static void HVQM4SetBuffer(SeqObj *seqobj, void *workbuff)
         state->v_nest_size = 70;
     }
 
-    state->bufTree1[0].tree = &state->trees[3];
-    state->bufTree1[1].tree = &state->trees[3];
+    state->basis_num[0].tree = &state->trees[3];
+    state->basis_num[1].tree = &state->trees[3];
 
-    state->bufTree1_rle[0].tree = &state->trees[1];
-    state->bufTree1_rle[1].tree = &state->trees[1];
+    state->basis_num_run[0].tree = &state->trees[1];
+    state->basis_num_run[1].tree = &state->trees[1];
 
     state->dc_values[0].tree = &state->trees[0];
     state->dc_values[1].tree = &state->trees[0];
@@ -1055,8 +1055,8 @@ static void Ipic_BasisNumDec(VideoState *state)
 {
     BlockData *luma_dst = state->planes[LUMA_IDX].payload;
     uint32_t y_v_blocks = state->planes[LUMA_IDX].v_blocks;
-    BitBufferWithTree *y_tree1 = &state->bufTree1[LUMA_IDX];
-    BitBufferWithTree *y_rle = &state->bufTree1_rle[LUMA_IDX];
+    BitBufferWithTree *y_tree1 = &state->basis_num[LUMA_IDX];
+    BitBufferWithTree *y_rle = &state->basis_num_run[LUMA_IDX];
     uint32_t rle = 0;
     while (y_v_blocks--)
     {
@@ -1085,8 +1085,8 @@ static void Ipic_BasisNumDec(VideoState *state)
     BlockData *u_dst = state->planes[1].payload;
     BlockData *v_dst = state->planes[2].payload;
     uint32_t uv_v_blocks = state->planes[1].v_blocks;
-    BitBufferWithTree *uv_tree1 = &state->bufTree1[CHROMA_IDX];
-    BitBufferWithTree *uv_tree2 = &state->bufTree1_rle[CHROMA_IDX];
+    BitBufferWithTree *uv_tree1 = &state->basis_num[CHROMA_IDX];
+    BitBufferWithTree *uv_tree2 = &state->basis_num_run[CHROMA_IDX];
     rle = 0;
     while (uv_v_blocks--)
     {
@@ -1620,13 +1620,13 @@ static void decode_PB_cc(VideoState *state, MCPlane mcplanes[PLANE_COUNT], uint3
             }
             else
             {
-                int16_t huff = decodeHuff(&state->bufTree1[LUMA_IDX]);
+                int16_t huff = decodeHuff(&state->basis_num[LUMA_IDX]);
                 if (huff)
                     ptr[planeY->some_half_array[i] * 2 + 1] = r30 | huff;
                 else
                 {
                     ptr[planeY->some_half_array[i] * 2 + 1] = r30;
-                    mcplaneY->rle = decodeHuff(&state->bufTree1_rle[0]);
+                    mcplaneY->rle = decodeHuff(&state->basis_num_run[0]);
                 }
             }
         }
@@ -1645,7 +1645,7 @@ static void decode_PB_cc(VideoState *state, MCPlane mcplanes[PLANE_COUNT], uint3
             }
             else
             {
-                int16_t huff = decodeHuff(&state->bufTree1[CHROMA_IDX]);
+                int16_t huff = decodeHuff(&state->basis_num[CHROMA_IDX]);
                 if (huff)
                 {
                     ptrU[planeU->some_half_array[i] * 2 + 1] = r30 | ((huff >> 0) & 0xF);
@@ -1655,7 +1655,7 @@ static void decode_PB_cc(VideoState *state, MCPlane mcplanes[PLANE_COUNT], uint3
                 {
                     ptrU[planeU->some_half_array[i] * 2 + 1] = r30;
                     ptrV[planeU->some_half_array[i] * 2 + 1] = r30;
-                    mcplaneU->rle = decodeHuff(&state->bufTree1_rle[1]);
+                    mcplaneU->rle = decodeHuff(&state->basis_num_run[1]);
                 }
             }
         }
@@ -1884,22 +1884,22 @@ static void HVQM4DecodeIpic(SeqObj *seqobj, uint8_t const *frame, void *present)
     uint8_t const *data = frame + 0x40;
     for (int i = 0; i < 2; ++i)
     {
-        setCode(&state->bufTree1[i].buf, data + read32(frame)); frame += 4;
-        setCode(&state->bufTree1_rle[i].buf, data + read32(frame)); frame += 4;
+        setCode(&state->basis_num[i].buf, data + read32(frame)); frame += 4;
+        setCode(&state->basis_num_run[i].buf, data + read32(frame)); frame += 4;
     }
     for (int i = 0; i < PLANE_COUNT; ++i)
     {
         setCode(&state->dc_values[i].buf, data + read32(frame)); frame += 4;
         setCode(&state->bufTree0[i].buf, data + read32(frame)); frame += 4;
-        setCode(&state->buf0[i],         data + read32(frame)); frame += 4;
+        setCode(&state->fixvl[i],         data + read32(frame)); frame += 4;
     }
     for (int i = 0; i < PLANE_COUNT; ++i)
     {
         setCode(&state->dc_rle[i].buf, data + read32(frame)); frame += 4;
     }
     // multiple structures share the same tree, we only need to initialize one of each
-    readTree(&state->bufTree1[0], 0, 0);
-    readTree(&state->bufTree1_rle[0], 0, 0);
+    readTree(&state->basis_num[0], 0, 0);
+    readTree(&state->basis_num_run[0], 0, 0);
     readTree(&state->dc_values[0], 1, scale);
     readTree(&state->bufTree0[0], 0, 2);
 
@@ -1931,21 +1931,21 @@ static void HVQM4DecodeBpic(SeqObj *seqobj, uint8_t const *frame, void *present,
     uint8_t const *data = frame + 0x44;
     for (int i = 0; i < 2; ++i)
     {
-        setCode(&state->bufTree1[i].buf, data + read32(frame)); frame += 4;
-        setCode(&state->bufTree1_rle[i].buf, data + read32(frame)); frame += 4;
+        setCode(&state->basis_num[i].buf,     data + read32(frame)); frame += 4;
+        setCode(&state->basis_num_run[i].buf, data + read32(frame)); frame += 4;
     }
     for (int i = 0; i < PLANE_COUNT; ++i)
     {
         setCode(&state->dc_values[i].buf, data + read32(frame)); frame += 4;
         setCode(&state->bufTree0[i].buf, data + read32(frame)); frame += 4;
-        setCode(&state->buf0[i],         data + read32(frame)); frame += 4;
+        setCode(&state->fixvl[i],         data + read32(frame)); frame += 4;
     }
     setCode(&state->mv_h.buf, data + read32(frame)); frame += 4;
     setCode(&state->mv_v.buf, data + read32(frame)); frame += 4;
     setCode(&state->mcb_type.buf, data + read32(frame)); frame += 4;
     setCode(&state->mcb_proc.buf, data + read32(frame)); frame += 4;
-    readTree(&state->bufTree1[0], 0, 0);
-    readTree(&state->bufTree1_rle[0], 0, 0);
+    readTree(&state->basis_num[0], 0, 0);
+    readTree(&state->basis_num_run[0], 0, 0);
     readTree(&state->dc_values[0], 1, state->unk6CD1);
     readTree(&state->bufTree0[0], 0, 2);
     readTree(&state->mv_h, 1, 0);
