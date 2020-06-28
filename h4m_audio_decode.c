@@ -1780,7 +1780,11 @@ static void getMVector(int32_t *result, BitBufferWithTree *buf, int32_t bits)
 
 static void MCBlockDecMCNest(VideoState *state, MCPlane mcplanes[PLANE_COUNT], int32_t x, int32_t y)
 {
-    void *target = mcplanes[0].target + x/2 + (y/2 - 16)*state->planes[0].width_in_samples - 32;
+    void *target;
+    if (state->is_landscape)
+        target = mcplanes[0].target + x/2 + (y/2 - 16)*state->planes[0].width_in_samples - 32;
+    else
+        target = mcplanes[0].target + x/2 + (y/2 - 32)*state->planes[0].width_in_samples - 16;
     uint32_t flag0 = x & 1;
     uint32_t flag1 = y & 1;
     for (int plane_idx = 0; plane_idx < PLANE_COUNT; ++plane_idx)
