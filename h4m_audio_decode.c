@@ -1264,6 +1264,11 @@ static void _MotionComp(void *dst, uint32_t dst_stride, void const *src, uint32_
             _MotionComp_11(dst, dst_stride, src, src_stride);
 }
 
+// payload format
+//         7.....6.....5.....4.....3.....2.....1.....0.....
+// byte 0: [                    pb_dc                     ]
+// byte 1:       [ mcb type ][proc][         type         ]
+
 typedef struct
 {
     uint32_t rle; // init 0
