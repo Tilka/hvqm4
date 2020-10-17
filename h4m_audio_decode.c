@@ -489,6 +489,8 @@ typedef struct
 #endif
     uint8_t unk_shift; // 1.3: 0x3CCA 1.5: 0x6CD0
     uint8_t unk6CD1; // 0x6CD1
+    // number of residual bits to read from mv_h/mv_v,
+    // one setting for each of past and future
     uint8_t mc_residual_bits_h[2]; // 0x6CD2
     uint8_t mc_residual_bits_v[2]; // 0x6CD4
 #if !defined(VERSION_1_3) || defined(FROGGER)
@@ -669,7 +671,7 @@ static int32_t decodeUOvfSym(BitBufferWithTree *buf, int32_t cmp_value)
     return sum;
 }
 
-static uint32_t GetAotBasis(VideoState *state, uint8_t dst[4][4], int32_t *sum, uint8_t const *nest_data, uint32_t nest_stride, uint32_t plane_idx)
+static uint32_t GetAotBasis(VideoState *state, uint8_t basis_out[4][4], int32_t *sum, uint8_t const *nest_data, uint32_t nest_stride, uint32_t plane_idx)
 {
     BitBuffer *buf = &state->fixvl[plane_idx];
     // 0x003F: big      : 6
@@ -680,6 +682,8 @@ static uint32_t GetAotBasis(VideoState *state, uint8_t dst[4][4], int32_t *sum, 
     // 0x8000: negated  : 1
     uint16_t bits = read16(buf->ptr);
     buf->ptr += 2;
+
+    // compute the DC nest offset
     uint32_t x_stride, y_stride;
     uint32_t big = bits & 0x3F;
     uint32_t small = (bits >> 6) & 0x1F;
@@ -695,14 +699,14 @@ static uint32_t GetAotBasis(VideoState *state, uint8_t dst[4][4], int32_t *sum, 
         x_stride =           1 << ((bits >> 12) & 1);
         y_stride = nest_stride << ((bits >> 11) & 1);
     }
-    uint8_t min = *nest_data;
-    uint8_t max = *nest_data;
+    uint8_t min = nest_data[0];
+    uint8_t max = nest_data[0];
     for (int y = 0; y < 4; ++y)
     {
         for (int x = 0; x < 4; ++x)
         {
             uint8_t nest_value = nest_data[y * y_stride + x * x_stride];
-            dst[y][x] = nest_value;
+            basis_out[y][x] = nest_value;
             min = nest_value < min ? nest_value : min;
             max = nest_value > max ? nest_value : max;
         }
@@ -715,7 +719,7 @@ static uint32_t GetAotBasis(VideoState *state, uint8_t dst[4][4], int32_t *sum, 
     return (*sum + offset) * inverse;
 }
 
-static uint32_t GetMCAotBasis(VideoState *state, uint8_t dst[4][4], int32_t *sum, uint8_t const *nest_data, uint32_t nest_stride, uint32_t plane_idx)
+static uint32_t GetMCAotBasis(VideoState *state, uint8_t basis_out[4][4], int32_t *sum, uint8_t const *nest_data, uint32_t nest_stride, uint32_t plane_idx)
 {
     // the only difference to GetAotBasis() seems to be the ">> 4 & 0xF"
     BitBuffer *buf = &state->fixvl[plane_idx];
@@ -743,7 +747,7 @@ static uint32_t GetMCAotBasis(VideoState *state, uint8_t dst[4][4], int32_t *sum
         for (int j = 0; j < 4; ++j)
         {
             uint8_t nest_value = (nest_data[i * stride + j * step] >> 4) & 0xF; // !
-            dst[i][j] = nest_value;
+            basis_out[i][j] = nest_value;
             min = nest_value < min ? nest_value : min;
             max = nest_value > max ? nest_value : max;
         }
@@ -756,19 +760,19 @@ static uint32_t GetMCAotBasis(VideoState *state, uint8_t dst[4][4], int32_t *sum
     return (*sum + foo) * inverse;
 }
 
-static int32_t GetAotSum(VideoState *state, int32_t result[4][4], uint8_t count, uint8_t const *nest_data, uint32_t nest_stride, uint32_t plane_idx)
+static int32_t GetAotSum(VideoState *state, int32_t result[4][4], uint8_t num_bases, uint8_t const *nest_data, uint32_t nest_stride, uint32_t plane_idx)
 {
     for (int y = 0; y < 4; ++y)
         for (int x = 0; x < 4; ++x)
             result[y][x] = 0;
-    uint8_t byte_result[4][4];
+    uint8_t basis[4][4];
     int32_t temp = 0;
-    for (int k = 0; k < count; ++k)
+    for (int k = 0; k < num_bases; ++k)
     {
-        uint32_t factor = GetAotBasis(state, byte_result, &temp, nest_data, nest_stride, plane_idx);
+        uint32_t factor = GetAotBasis(state, basis, &temp, nest_data, nest_stride, plane_idx);
         for (int y = 0; y < 4; ++y)
             for (int x = 0; x < 4; ++x)
-                result[y][x] += factor * byte_result[y][x];
+                result[y][x] += factor * basis[y][x];
     }
     int32_t sum = 0;
     for (int y = 0; y < 4; ++y)
@@ -1297,9 +1301,9 @@ typedef struct
     void *target; // 0x18
     void *past; // 0x1C
     void *future; // 0x20
-    uint16_t h_unk24;
+    uint16_t h_mcb_stride;
     uint16_t padding; // ?
-    uint32_t v_unk28;
+    uint32_t v_mcb_stride;
     uint32_t h_samp_per_block;
     uint32_t stride;
 } MCPlane;
@@ -1510,8 +1514,8 @@ static void initMCHandler(VideoState *state, MCPlane mcplanes[PLANE_COUNT], void
         mcplane->future  = future;
         mcplane->payload_cur_blk = plane->payload;
         mcplane->payload_cur_row = plane->payload;
-        mcplane->h_unk24 = 8 >> plane->width_shift;
-        mcplane->v_unk28 = plane->width_in_samples * (8 >> plane->height_shift);
+        mcplane->h_mcb_stride = 8 >> plane->width_shift;
+        mcplane->v_mcb_stride = plane->width_in_samples * (8 >> plane->height_shift);
         mcplane->h_samp_per_block = plane->h_samp_per_block;
         mcplane->stride = plane->h_blocks_safe * plane->v_samp_per_block;
 
@@ -1606,7 +1610,7 @@ static void setMCNextBlk(MCPlane mcplanes[PLANE_COUNT])
 {
     for (int i = 0; i < PLANE_COUNT; ++i)
     {
-        mcplanes[i].top += mcplanes[i].h_unk24;
+        mcplanes[i].top += mcplanes[i].h_mcb_stride;
         mcplanes[i].payload_cur_blk += mcplanes[i].h_samp_per_block;
     }
 }
@@ -1618,10 +1622,10 @@ static void setMCDownBlk(MCPlane mcplanes[PLANE_COUNT])
     for (int i = 0; i < PLANE_COUNT; ++i)
     {
         MCPlane *mcplane = &mcplanes[i];
-        mcplane->present += mcplane->v_unk28;
-        BlockData *ptr = mcplane->payload_cur_row + mcplane->stride;
-        mcplane->payload_cur_blk = ptr;
-        mcplane->payload_cur_row = ptr;
+        mcplane->present += mcplane->v_mcb_stride;
+        BlockData *first_block_on_next_row = mcplane->payload_cur_row + mcplane->stride;
+        mcplane->payload_cur_blk = first_block_on_next_row;
+        mcplane->payload_cur_row = first_block_on_next_row;
     }
 }
 
@@ -1743,12 +1747,12 @@ static void spread_PB_descMap(SeqObj *seqobj, MCPlane mcplanes[PLANE_COUNT])
             }
             setMCNextBlk(mcplanes);
                 // for all planes
-                //     top             += h_unk24
+                //     top             += h_mcb_stride
                 //     payload_cur_blk += h_samp_per_block
         }
         setMCDownBlk(mcplanes);
             // for all planes
-            //     present += v_unk28
+            //     present += v_mcb_stride
             //     payload_cur_row += stride;
             //     payload_cur_blk = payload_cur_row
     }
@@ -1903,7 +1907,7 @@ static void BpicPlaneDec(SeqObj *seqobj, void *present, void *past, void *future
         setMCTop(mcplanes);
         for (int j = 0; j < seqobj->width; j += 8)
         {
-            uint8_t bits = mcplanes[0].payload_cur_blk[0].type;
+            uint8_t bits = mcplanes[0].payload_cur_blk->type;
             // 0: intra
             // 1: inter - past
             // 2: inter - future
@@ -1958,7 +1962,7 @@ static void HVQM4DecodeIpic(SeqObj *seqobj, uint8_t const *frame, void *present)
     for (int i = 0; i < PLANE_COUNT; ++i)
     {
         setCode(&state->dc_values[i].buf, data + read32(frame)); frame += 4;
-        setCode(&state->bufTree0[i].buf, data + read32(frame)); frame += 4;
+        setCode(&state->bufTree0[i].buf,  data + read32(frame)); frame += 4;
         setCode(&state->fixvl[i],         data + read32(frame)); frame += 4;
     }
     for (int i = 0; i < PLANE_COUNT; ++i)
