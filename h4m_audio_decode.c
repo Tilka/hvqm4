@@ -489,8 +489,8 @@ typedef struct
 #endif
     uint8_t unk_shift; // 1.3: 0x3CCA 1.5: 0x6CD0
     uint8_t unk6CD1; // 0x6CD1
-    uint8_t unk6CD2[2]; // 0x6CD2
-    uint8_t unk6CD4[2]; // 0x6CD4
+    uint8_t mc_residual_bits_h[2]; // 0x6CD2
+    uint8_t mc_residual_bits_v[2]; // 0x6CD4
 #if !defined(VERSION_1_3) || defined(FROGGER)
     uint8_t maybe_padding[2]; // 0x6CD6-0x6CD7
 #endif
@@ -1337,7 +1337,7 @@ static void IntraAotBlock(VideoState *state, uint8_t *dst, uint32_t stride, uint
 }
 
 static void PrediAotBlock(VideoState *state, uint8_t *dst, uint8_t const *src, uint32_t stride, uint8_t block_type,
-                          uint8_t *nest_data, uint32_t h_nest_size, uint32_t plane_idx, uint32_t dx, uint32_t dy)
+                          uint8_t *nest_data, uint32_t h_nest_size, uint32_t plane_idx, uint32_t hpel_dx, uint32_t hpel_dy)
 {
     int32_t result[4][4];
     --block_type;
@@ -1345,7 +1345,7 @@ static void PrediAotBlock(VideoState *state, uint8_t *dst, uint8_t const *src, u
 
     uint8_t mdst[4][4];
     uint32_t const dst_stride = 4;
-    _MotionComp(mdst, dst_stride, src, stride, dx, dy);
+    _MotionComp(mdst, dst_stride, src, stride, hpel_dx, hpel_dy);
     int32_t mean = 8;
     for (int y = 0; y < 4; ++y)
         for (int x = 0; x < 4; ++x)
@@ -1760,24 +1760,20 @@ static void setMCTarget(MCPlane mcplanes[PLANE_COUNT], uint32_t reference_frame)
     }
 }
 
-static void getMVector(int32_t *result, BitBufferWithTree *buf, int32_t bits)
+static void getMVector(int32_t *result, BitBufferWithTree *buf, int32_t residual_bits)
 {
-    int32_t r31 = 1 << (bits + 5);
+    int32_t max_val_plus_1 = 1 << (bits + 5);
     // quantized value
     int32_t value = decodeHuff(buf) << bits;
     // residual bits
     for (int i = bits - 1; i >= 0; --i)
         value += getBit(&buf->buf) << i;
     *result += value;
-    if (*result < r31)
-    {
-        if (*result < -r31)
-            *result += r31 << 1;
-    }
-    else
-    {
-        *result -= r31 << 1;
-    }
+    // signed wrap to -max_val_plus_1 .. max_val_plus_1-1
+    if (*result >= max_val_plus_1)
+        *result -= max_val_plus_1 << 1;
+    else if (*result < -max_val_plus_1)
+        *result += max_val_plus_1 << 1;
 }
 
 static void MCBlockDecMCNest(VideoState *state, MCPlane mcplanes[PLANE_COUNT], int32_t x, int32_t y)
@@ -1866,8 +1862,8 @@ static void BpicPlaneDec(SeqObj *seqobj, void *present, void *past, void *future
                     mv_h = 0;
                     mv_v = 0;
                 }
-                getMVector(&mv_h, &state->mv_h, state->unk6CD2[reference_frame]);
-                getMVector(&mv_v, &state->mv_v, state->unk6CD4[reference_frame]);
+                getMVector(&mv_h, &state->mv_h, state->mc_residual_bits_h[reference_frame]);
+                getMVector(&mv_v, &state->mv_v, state->mc_residual_bits_v[reference_frame]);
                 if (((bits >> 4) & 1) == 0)
                     MCBlockDecMCNest(state, mcplanes, j*2 + mv_h, i*2 + mv_v);
                 else
@@ -1928,10 +1924,10 @@ static void HVQM4DecodeBpic(SeqObj *seqobj, uint8_t const *frame, void *present,
     VideoState *state = seqobj->state;
     state->unk_shift = frame[1];
     state->unk6CD1 = frame[0];
-    state->unk6CD2[0] = frame[2];
-    state->unk6CD4[0] = frame[3];
-    state->unk6CD2[1] = frame[4];
-    state->unk6CD4[1] = frame[5];
+    state->mc_residual_bits_h[0] = frame[2];
+    state->mc_residual_bits_v[0] = frame[3];
+    state->mc_residual_bits_h[1] = frame[4];
+    state->mc_residual_bits_v[1] = frame[5];
     // frame[6] and frame[7] are unused
     frame += 8;
     uint8_t const *data = frame + 0x44;
