@@ -1526,6 +1526,20 @@ static void initMCBtype(BitBufferWithTree *buftree, struct RLDecoder *type)
     }
 }
 
+// not confirmed: 
+//
+// the mcb type stream has one symbol per 8x8 block
+// the mcb proc stream has one symbol wherever type != 0
+//   type: 1001112010102211 |
+//   proc: 0  0011 1 0 0110 |
+// expressed as initial values and changes
+//   type: 1- +  +++-+-- -  |
+//   proc: 0    x    x  x x |
+// and encoded as bitstreams (0 and 1 are literal bits, [n] are huffman-encoded values)
+//          1   -   +   +   +   +   -   +   -   -   -
+//   type: 01[1]1[2]0[3]0[1]0[1]0[1]1[1]0[1]1[1]1[2]1[2]
+//   proc: 0[5][5][3][2][1]
+
 static void setMCTop(MCPlane mcplanes[PLANE_COUNT])
 {
     for (int i = 0; i < PLANE_COUNT; ++i)
