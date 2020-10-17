@@ -1249,15 +1249,16 @@ static void _MotionComp_11(uint8_t *dst, uint32_t dst_stride, uint8_t const *src
             dst[i * dst_stride + j] = (src[i * src_stride + j] + src[i * src_stride + j + 1] + src[(i + 1) * src_stride + j] + src[(i + 1) * src_stride + j + 1] + 2) >> 2;
 }
 
-static void _MotionComp(void *dst, uint32_t dst_stride, void const *src, uint32_t src_stride, uint32_t unk7, uint32_t unk8)
+// hpel = half-pixel offset
+static void _MotionComp(void *dst, uint32_t dst_stride, void const *src, uint32_t src_stride, uint32_t hpel_dx, uint32_t hpel_dy)
 {
-    if (unk8 == 0)
-        if (unk7 == 0)
+    if (hpel_dy == 0)
+        if (hpel_dx == 0)
             _MotionComp_00(dst, dst_stride, src, src_stride);
         else
             _MotionComp_10(dst, dst_stride, src, src_stride);
     else
-        if (unk7 == 0)
+        if (hpel_dx == 0)
             _MotionComp_01(dst, dst_stride, src, src_stride);
         else
             _MotionComp_11(dst, dst_stride, src, src_stride);
@@ -1284,58 +1285,59 @@ typedef struct
 _Static_assert(sizeof(MCPlane) == 0x34, "sizeof(MCPlane) is wrong");
 #endif
 
-static void MotionComp(VideoState *state, MCPlane mcplanes[PLANE_COUNT], int32_t unk5, int32_t unk6)
+static void MotionComp(VideoState *state, MCPlane mcplanes[PLANE_COUNT], int32_t dx, int32_t dy)
 {
-    uint32_t flag0 = unk5 & 1;
-    uint32_t flag1 = unk6 & 1;
+    uint32_t hpel_dx = dx & 1;
+    uint32_t hpel_dy = dy & 1;
     for (int i = 0; i < PLANE_COUNT; ++i)
     {
         MCPlane *mcplane = &mcplanes[i];
         HVQPlaneDesc *plane = &state->planes[i];
-        int32_t foo = unk5 >> plane->width_shift;
-        int32_t bar = unk6 >> plane->height_shift;
+        int32_t plane_dx = dx >> plane->width_shift;
+        int32_t plane_dy = dy >> plane->height_shift;
 #ifndef VERSION_1_3
         if (state->padding[0])
         {
-            flag0 = foo & 1;
-            flag1 = bar & 1;
+            hpel_dx = plane_dx & 1;
+            hpel_dy = plane_dy & 1;
         }
 #endif
-        void *ptr = mcplane->target + (bar >> 1) * plane->width_in_samples + (foo >> 1);
+        void *ptr = mcplane->target + (plane_dy >> 1) * plane->width_in_samples + (plane_dx >> 1);
         for (int j = 0; j < plane->block_size_in_samples; ++j)
         {
             _MotionComp(mcplane->top + plane->some_word_array[j],
                         plane->width_in_samples,
                         ptr + plane->some_word_array[j],
                         plane->width_in_samples,
-                        flag0,
-                        flag1);
+                        hpel_dx,
+                        hpel_dy);
         }
     }
 }
 
-static void IntraAotBlock(VideoState *state, uint8_t *dst, uint32_t stride, uint8_t value, uint8_t block_type, uint32_t plane_idx)
+// aot = adaptive orthogonal transform
+static void IntraAotBlock(VideoState *state, uint8_t *dst, uint32_t stride, uint8_t replacementAverage, uint8_t block_type, uint32_t plane_idx)
 {
     if (block_type == 6)
     {
         OrgBlock(state, dst, stride, plane_idx);
         return;
     }
-    int32_t r30 = value << state->unk_shift;
     int32_t result[4][4];
-    r30 -= GetAotSum(state, result, block_type, state->nest_data, state->h_nest_size, plane_idx);
+    int32_t aotAverage = GetAotSum(state, result, block_type, state->nest_data, state->h_nest_size, plane_idx);
+    int32_t delta = (replacementAverage << state->unk_shift) - aotAverage;
     for (int y = 0; y < 4; ++y)
     {
         for (int x = 0; x < 4; ++x)
         {
-            uint32_t value = ((result[y][x] + r30) >> state->unk_shift);
+            int32_t value = ((result[y][x] + delta) >> state->unk_shift);
             dst[y * stride + x] = saturate(value);
         }
     }
 }
 
 static void PrediAotBlock(VideoState *state, uint8_t *dst, uint8_t const *src, uint32_t stride, uint8_t block_type,
-                          uint8_t *nest_data, uint32_t h_nest_size, uint32_t plane_idx, uint32_t foo, uint32_t bar)
+                          uint8_t *nest_data, uint32_t h_nest_size, uint32_t plane_idx, uint32_t dx, uint32_t dy)
 {
     int32_t result[4][4];
     --block_type;
@@ -1343,7 +1345,7 @@ static void PrediAotBlock(VideoState *state, uint8_t *dst, uint8_t const *src, u
 
     uint8_t mdst[4][4];
     uint32_t const dst_stride = 4;
-    _MotionComp(mdst, dst_stride, src, stride, foo, bar);
+    _MotionComp(mdst, dst_stride, src, stride, dx, dy);
     int32_t mean = 8;
     for (int y = 0; y < 4; ++y)
         for (int x = 0; x < 4; ++x)
@@ -1785,8 +1787,8 @@ static void MCBlockDecMCNest(VideoState *state, MCPlane mcplanes[PLANE_COUNT], i
         target = mcplanes[0].target + x/2 + (y/2 - 16)*state->planes[0].width_in_samples - 32;
     else
         target = mcplanes[0].target + x/2 + (y/2 - 32)*state->planes[0].width_in_samples - 16;
-    uint32_t flag0 = x & 1;
-    uint32_t flag1 = y & 1;
+    uint32_t hpel_dx = x & 1;
+    uint32_t hpel_dy = y & 1;
     for (int plane_idx = 0; plane_idx < PLANE_COUNT; ++plane_idx)
     {
         MCPlane *mcplane = &mcplanes[plane_idx];
@@ -1803,24 +1805,24 @@ static void MCBlockDecMCNest(VideoState *state, MCPlane mcplanes[PLANE_COUNT], i
             }
             else
             {
-                int32_t foo = x >> plane->width_shift;
-                int32_t bar = y >> plane->height_shift;
+                int32_t plane_dx = x >> plane->width_shift;
+                int32_t plane_dy = y >> plane->height_shift;
 #ifndef VERSION_1_3
                 if (state->padding[0])
                 {
-                    flag0 = foo & 1;
-                    flag1 = bar & 1;
+                    hpel_dx = plane_dx & 1;
+                    hpel_dy = plane_dy & 1;
                 }
 #endif
-                void const *src = mcplane->target + (bar >> 1) * plane->width_in_samples + (foo >> 1) + plane->some_word_array[i];
+                void const *src = mcplane->target + (plane_dy >> 1) * plane->width_in_samples + (plane_dx >> 1) + plane->some_word_array[i];
                 if (block_type == 0)
                 {
-                    _MotionComp(dst, stride, src, stride, flag0, flag1);
+                    _MotionComp(dst, stride, src, stride, hpel_dx, hpel_dy);
                 }
                 else
                 {
                     uint32_t strideY = state->planes[0].width_in_samples;
-                    PrediAotBlock(state, dst, src, stride, block_type, target, strideY, plane_idx, flag0, flag1);
+                    PrediAotBlock(state, dst, src, stride, block_type, target, strideY, plane_idx, hpel_dx, hpel_dy);
                 }
             }
         }
