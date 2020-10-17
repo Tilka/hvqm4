@@ -1587,6 +1587,8 @@ static uint32_t getMCBproc(BitBufferWithTree *buftree, struct RLDecoder *proc)
     return proc->value;
 }
 
+// advance one 8x8 block to the right
+// (8x8 in seqobj size units, which are presumably pixels)
 static void setMCNextBlk(MCPlane mcplanes[PLANE_COUNT])
 {
     for (int i = 0; i < PLANE_COUNT; ++i)
@@ -1596,6 +1598,8 @@ static void setMCNextBlk(MCPlane mcplanes[PLANE_COUNT])
     }
 }
 
+// move to the next row of 8x8 blocks
+// (8x8 in seqobj size units, which are presumably pixels)
 static void setMCDownBlk(MCPlane mcplanes[PLANE_COUNT])
 {
     for (int i = 0; i < PLANE_COUNT; ++i)
