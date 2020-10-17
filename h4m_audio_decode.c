@@ -450,9 +450,9 @@ typedef struct
     uint32_t size_in_samples; // 2C-2F
     uint8_t width_shift; // 30
     uint8_t height_shift; // 31
-    uint8_t h_samp_per_block; // 32
-    uint8_t v_samp_per_block; // 33
-    uint8_t block_size_in_samples; // 34
+    uint8_t h_samp_per_block; // 32  1..2
+    uint8_t v_samp_per_block; // 33  1..2
+    uint8_t block_size_in_samples; // 34  1..4
     uint8_t padding[3]; // 35-37
 } HVQPlaneDesc;
 #ifndef NATIVE
@@ -831,9 +831,9 @@ static void setHVQPlaneDesc(SeqObj *seqobj, uint8_t plane_idx, uint8_t h_samp, u
     plane->height_in_samples = seqobj->height >> plane->height_shift;
     plane->size_in_samples = plane->width_in_samples * plane->height_in_samples;
     // pixels per 2x2 block
-    plane->h_samp_per_block = 2 >> plane->width_shift;
-    plane->v_samp_per_block = 2 >> plane->height_shift;
-    plane->block_size_in_samples = plane->h_samp_per_block * plane->v_samp_per_block;
+    plane->h_samp_per_block = 2 >> plane->width_shift;  // 1..2
+    plane->v_samp_per_block = 2 >> plane->height_shift; // 1..2
+    plane->block_size_in_samples = plane->h_samp_per_block * plane->v_samp_per_block; // 1..4
     // number of 4x4 blocks
     plane->h_blocks = seqobj->width / (h_samp * 4);
     plane->v_blocks = seqobj->height / (v_samp * 4);
@@ -1268,6 +1268,11 @@ static void _MotionComp(void *dst, uint32_t dst_stride, void const *src, uint32_
 //         7.....6.....5.....4.....3.....2.....1.....0.....
 // byte 0: [                    pb_dc                     ]
 // byte 1:       [ mcb type ][proc][         type         ]
+// 
+//   mcb type probably means
+//     0: intra
+//     1: inter - past
+//     2: inter - future
 
 typedef struct
 {
@@ -1718,8 +1723,15 @@ static void spread_PB_descMap(SeqObj *seqobj, MCPlane mcplanes[PLANE_COUNT])
                 decode_PB_cc(state, mcplanes, getMCBproc(&state->mcb_proc, &proc), type.value);
             }
             setMCNextBlk(mcplanes);
+                // for all planes
+                //     top          += h_unk24
+                //     payload_ptr8 += h_samp_per_block * 2
         }
         setMCDownBlk(mcplanes);
+            // for all planes
+            //     present += v_unk28
+            //     payload_ptrC += stride * 2;
+            //     payload_ptr8 = payload_ptrC
     }
 }
 
@@ -1744,6 +1756,7 @@ static void MCBlockDecDCNest(VideoState *state, MCPlane mcplanes[PLANE_COUNT])
         int32_t line = plane->h_blocks_safe;
         for (int j = 0; j < plane->block_size_in_samples; ++j)
         {
+            // dst is a 4x4 region
             void *dst = mcplanes[plane_idx].top + plane->some_word_array[j];
             int32_t r30 = plane->some_half_array[j];
             uint32_t value = ptr[r30 * 2];
@@ -1823,6 +1836,7 @@ static void MCBlockDecMCNest(VideoState *state, MCPlane mcplanes[PLANE_COUNT], i
         {
             uint8_t const *ptr = mcplane->payload_ptr8;
             uint8_t block_type = ptr[plane->some_half_array[i] * 2 + 1] & 0xF;
+            // dst is a 4x4 region
             void *dst = mcplane->top + plane->some_word_array[i];
             uint32_t stride = plane->width_in_samples;
             if (block_type == 6)
