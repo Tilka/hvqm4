@@ -1278,8 +1278,8 @@ typedef struct
 {
     uint32_t rle; // init 0
     uint32_t pb_dc; // init 0x7F
-    void *payload_ptr8; // 8
-    void *payload_ptrC; // 0xC
+    void *payload_cur_blk; // 8
+    void *payload_cur_row; // 0xC
     void *present; // 0x10
     void *top; // 0x14
     void *target; // 0x18
@@ -1497,8 +1497,8 @@ static void initMCHandler(VideoState *state, MCPlane mcplanes[PLANE_COUNT], void
         mcplane->present = present;
         mcplane->past    = past;
         mcplane->future  = future;
-        mcplane->payload_ptr8 = plane->payload;
-        mcplane->payload_ptrC = plane->payload;
+        mcplane->payload_cur_blk = plane->payload;
+        mcplane->payload_cur_row = plane->payload;
         mcplane->h_unk24 = 8 >> plane->width_shift;
         mcplane->v_unk28 = plane->width_in_samples * (8 >> plane->height_shift);
         mcplane->h_samp_per_block = plane->h_samp_per_block;
@@ -1592,7 +1592,7 @@ static void setMCNextBlk(MCPlane mcplanes[PLANE_COUNT])
     for (int i = 0; i < PLANE_COUNT; ++i)
     {
         mcplanes[i].top += mcplanes[i].h_unk24;
-        mcplanes[i].payload_ptr8 += mcplanes[i].h_samp_per_block * 2;
+        mcplanes[i].payload_cur_blk += mcplanes[i].h_samp_per_block * 2;
     }
 }
 
@@ -1602,9 +1602,9 @@ static void setMCDownBlk(MCPlane mcplanes[PLANE_COUNT])
     {
         MCPlane *mcplane = &mcplanes[i];
         mcplane->present += mcplane->v_unk28;
-        void *ptr = mcplane->payload_ptrC + mcplane->stride * 2;
-        mcplane->payload_ptr8 = ptr;
-        mcplane->payload_ptrC = ptr;
+        void *ptr = mcplane->payload_cur_row + mcplane->stride * 2;
+        mcplane->payload_cur_blk = ptr;
+        mcplane->payload_cur_row = ptr;
     }
 }
 
@@ -1617,7 +1617,7 @@ static void decode_PB_dc(VideoState *state, MCPlane mcplanes[PLANE_COUNT])
         for (int j = 0; j < plane->block_size_in_samples; ++j)
         {
             mcplane->pb_dc += decodeSOvfSym(&state->dc_values[i], state->boundA, state->boundB);
-            uint8_t *payload = mcplane->payload_ptr8;
+            uint8_t *payload = mcplane->payload_cur_blk;
             payload[plane->some_half_array[j] * 2] = mcplane->pb_dc;
         }
     }
@@ -1636,7 +1636,7 @@ static void decode_PB_cc(VideoState *state, MCPlane mcplanes[PLANE_COUNT], uint3
     {
         for (int i = 0; i < PLANE_COUNT; ++i)
         {
-            uint8_t *payload = mcplanes[i].payload_ptr8;
+            uint8_t *payload = mcplanes[i].payload_cur_blk;
             HVQPlaneDesc *plane = &state->planes[i];
             for (int j = 0; j < plane->block_size_in_samples; ++j)
                 payload[plane->some_half_array[j] * 2 + 1] = r30;
@@ -1649,7 +1649,7 @@ static void decode_PB_cc(VideoState *state, MCPlane mcplanes[PLANE_COUNT], uint3
         MCPlane *mcplaneY = &mcplanes[0];
         for (int i = 0; i < planeY->block_size_in_samples; ++i)
         {
-            uint8_t *ptr = mcplaneY->payload_ptr8;
+            uint8_t *ptr = mcplaneY->payload_cur_blk;
             if (mcplaneY->rle)
             {
                 ptr[planeY->some_half_array[i] * 2 + 1] = r30;
@@ -1672,8 +1672,8 @@ static void decode_PB_cc(VideoState *state, MCPlane mcplanes[PLANE_COUNT], uint3
         MCPlane *mcplaneV = &mcplanes[2];
         for (int i = 0; i < planeU->block_size_in_samples; ++i)
         {
-            uint8_t *ptrU = mcplaneU->payload_ptr8;
-            uint8_t *ptrV = mcplaneV->payload_ptr8;
+            uint8_t *ptrU = mcplaneU->payload_cur_blk;
+            uint8_t *ptrV = mcplaneV->payload_cur_blk;
             if (mcplaneU->rle)
             {
                 ptrU[planeU->some_half_array[i] * 2 + 1] = r30;
@@ -1724,14 +1724,14 @@ static void spread_PB_descMap(SeqObj *seqobj, MCPlane mcplanes[PLANE_COUNT])
             }
             setMCNextBlk(mcplanes);
                 // for all planes
-                //     top          += h_unk24
-                //     payload_ptr8 += h_samp_per_block * 2
+                //     top             += h_unk24
+                //     payload_cur_blk += h_samp_per_block * 2
         }
         setMCDownBlk(mcplanes);
             // for all planes
             //     present += v_unk28
-            //     payload_ptrC += stride * 2;
-            //     payload_ptr8 = payload_ptrC
+            //     payload_cur_row += stride * 2;
+            //     payload_cur_blk = payload_cur_row
     }
 }
 
@@ -1740,8 +1740,8 @@ static void resetMCHandler(VideoState *state, MCPlane mcplanes[PLANE_COUNT], voi
     for (int i = 0; i < PLANE_COUNT; ++i)
     {
         mcplanes[i].present = present;
-        mcplanes[i].payload_ptr8 = state->planes[i].payload;
-        mcplanes[i].payload_ptrC = state->planes[i].payload;
+        mcplanes[i].payload_cur_blk = state->planes[i].payload;
+        mcplanes[i].payload_cur_row = state->planes[i].payload;
         present += state->planes[i].size_in_samples;
     }
 }
@@ -1750,7 +1750,7 @@ static void MCBlockDecDCNest(VideoState *state, MCPlane mcplanes[PLANE_COUNT])
 {
     for (int plane_idx = 0; plane_idx < PLANE_COUNT; ++plane_idx)
     {
-        uint8_t const *ptr = mcplanes[plane_idx].payload_ptr8;
+        uint8_t const *ptr = mcplanes[plane_idx].payload_cur_blk;
         HVQPlaneDesc *plane = &state->planes[plane_idx];
         uint32_t stride = plane->width_in_samples;
         int32_t line = plane->h_blocks_safe;
@@ -1834,7 +1834,7 @@ static void MCBlockDecMCNest(VideoState *state, MCPlane mcplanes[PLANE_COUNT], i
         HVQPlaneDesc *plane = &state->planes[plane_idx];
         for (int i = 0; i < plane->block_size_in_samples; ++i)
         {
-            uint8_t const *ptr = mcplane->payload_ptr8;
+            uint8_t const *ptr = mcplane->payload_cur_blk;
             uint8_t block_type = ptr[plane->some_half_array[i] * 2 + 1] & 0xF;
             // dst is a 4x4 region
             void *dst = mcplane->top + plane->some_word_array[i];
@@ -1884,7 +1884,7 @@ static void BpicPlaneDec(SeqObj *seqobj, void *present, void *past, void *future
         setMCTop(mcplanes);
         for (int j = 0; j < seqobj->width; j += 8)
         {
-            uint8_t bits = *((uint8_t*)mcplanes[0].payload_ptr8 + 1);
+            uint8_t bits = *((uint8_t*)mcplanes[0].payload_cur_blk + 1);
             // 0: intra
             // 1: inter - past
             // 2: inter - future
