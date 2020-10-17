@@ -1350,8 +1350,7 @@ static void PrediAotBlock(VideoState *state, uint8_t *dst, uint8_t const *src, u
                           uint8_t *nest_data, uint32_t h_nest_size, uint32_t plane_idx, uint32_t hpel_dx, uint32_t hpel_dy)
 {
     int32_t result[4][4];
-    --block_type;
-    uint32_t aot_sum = GetMCAotSum(state, result, block_type, nest_data, h_nest_size, plane_idx);
+    uint32_t aot_sum = GetMCAotSum(state, result, block_type - 1, nest_data, h_nest_size, plane_idx);
 
     uint8_t mdst[4][4];
     uint32_t const dst_stride = 4;
@@ -1989,7 +1988,7 @@ static void HVQM4DecodeBpic(SeqObj *seqobj, uint8_t const *frame, void *present,
     for (int i = 0; i < PLANE_COUNT; ++i)
     {
         setCode(&state->dc_values[i].buf, data + read32(frame)); frame += 4;
-        setCode(&state->bufTree0[i].buf, data + read32(frame)); frame += 4;
+        setCode(&state->bufTree0[i].buf,  data + read32(frame)); frame += 4;
         setCode(&state->fixvl[i],         data + read32(frame)); frame += 4;
     }
     setCode(&state->mv_h.buf, data + read32(frame)); frame += 4;
