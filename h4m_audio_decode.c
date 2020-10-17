@@ -1762,11 +1762,11 @@ static void setMCTarget(MCPlane mcplanes[PLANE_COUNT], uint32_t reference_frame)
 
 static void getMVector(int32_t *result, BitBufferWithTree *buf, int32_t residual_bits)
 {
-    int32_t max_val_plus_1 = 1 << (bits + 5);
+    int32_t max_val_plus_1 = 1 << (residual_bits + 5);
     // quantized value
-    int32_t value = decodeHuff(buf) << bits;
+    int32_t value = decodeHuff(buf) << residual_bits;
     // residual bits
-    for (int i = bits - 1; i >= 0; --i)
+    for (int i = residual_bits - 1; i >= 0; --i)
         value += getBit(&buf->buf) << i;
     *result += value;
     // signed wrap to -max_val_plus_1 .. max_val_plus_1-1
