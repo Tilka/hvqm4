@@ -1221,6 +1221,7 @@ static void MakeNest(VideoState *state, uint16_t nest_x, uint16_t nest_y)
             *nest++ = 0;
 }
 
+// copy 4x4 samples without interpolation
 static void _MotionComp_00(uint8_t *dst, uint32_t dst_stride, uint8_t const *src, uint32_t src_stride)
 {
     for (int i = 0; i < 4; ++i)
@@ -1228,25 +1229,36 @@ static void _MotionComp_00(uint8_t *dst, uint32_t dst_stride, uint8_t const *src
             dst[i * dst_stride + j] = src[i * src_stride + j];
 }
 
+// offset vertically by half a sample
 static void _MotionComp_01(uint8_t *dst, uint32_t dst_stride, uint8_t const *src, uint32_t src_stride)
 {
     for (int i = 0; i < 4; ++i)
         for (int j = 0; j < 4; ++j)
-            dst[i * dst_stride + j] = (src[i * src_stride + j] + src[(i + 1) * src_stride + j] + 1) >> 1;
+            dst[i * dst_stride + j] = (
+                    src[(i + 0) * src_stride + j] +
+                    src[(i + 1) * src_stride + j] + 1) / 2;
 }
 
+// offset horizontally by half a sample
 static void _MotionComp_10(uint8_t *dst, uint32_t dst_stride, uint8_t const *src, uint32_t src_stride)
 {
     for (int i = 0; i < 4; ++i)
         for (int j = 0; j < 4; ++j)
-            dst[i * dst_stride + j] = (src[i * src_stride + j] + src[i * src_stride + j + 1] + 1) >> 1;
+            dst[i * dst_stride + j] = (
+                    src[i * src_stride + j + 0] +
+                    src[i * src_stride + j + 1] + 1) / 2;
 }
 
+// offset by half a sample in both directions
 static void _MotionComp_11(uint8_t *dst, uint32_t dst_stride, uint8_t const *src, uint32_t src_stride)
 {
     for (int i = 0; i < 4; ++i)
         for (int j = 0; j < 4; ++j)
-            dst[i * dst_stride + j] = (src[i * src_stride + j] + src[i * src_stride + j + 1] + src[(i + 1) * src_stride + j] + src[(i + 1) * src_stride + j + 1] + 2) >> 2;
+            dst[i * dst_stride + j] = (
+                    src[(i + 0) * src_stride + j + 0] +
+                    src[(i + 0) * src_stride + j + 1] +
+                    src[(i + 1) * src_stride + j + 0] +
+                    src[(i + 1) * src_stride + j + 1] + 2) >> 2;
 }
 
 // hpel = half-pixel offset
