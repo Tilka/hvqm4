@@ -1500,21 +1500,29 @@ static void initMCHandler(VideoState *state, MCPlane mcplanes[PLANE_COUNT], void
     }
 }
 
-static void initMCBproc(BitBufferWithTree *buftree, uint32_t *proc)
+// run-length decoder
+struct RLDecoder {
+    uint32_t value;
+    uint32_t count;
+};
+
+// stream of 0 and 1
+static void initMCBproc(BitBufferWithTree *buftree, struct RLDecoder *proc)
 {
     if (buftree->buf.ptr)
     {
-        proc[0] = getBit(&buftree->buf);
-        proc[1] = decodeUOvfSym(buftree, 0xFF);
+        proc->value = getBit(&buftree->buf);
+        proc->count = decodeUOvfSym(buftree, 0xFF);
     }
 }
 
-static void initMCBtype(BitBufferWithTree *buftree, uint32_t *type)
+// stream of 0, 1 and 2
+static void initMCBtype(BitBufferWithTree *buftree, struct RLDecoder *type)
 {
     if (buftree->buf.ptr)
     {
-        type[0] = (getBit(&buftree->buf) << 1) | getBit(&buftree->buf);
-        type[1] = decodeUOvfSym(buftree, 0xFF);
+        type->value = (getBit(&buftree->buf) << 1) | getBit(&buftree->buf);
+        type->count = decodeUOvfSym(buftree, 0xFF);
     }
 }
 
@@ -1529,27 +1537,30 @@ static uint32_t mcbtypetrans[2][3] = {
     { 2, 0, 1 },
 };
 
-static uint32_t getMCBtype(BitBufferWithTree *buftree, uint32_t *type)
+static uint32_t getMCBtype(BitBufferWithTree *buftree, struct RLDecoder *type)
 {
-    if (type[1] == 0)
+    if (type->count == 0)
     {
+        // bit == 0 -> increment
+        // bit == 1 -> decrement
+        // then wrap to range 0..2
         uint32_t bit = getBit(&buftree->buf);
-        type[0] = mcbtypetrans[bit][type[0]];
-        type[1] = decodeUOvfSym(buftree, 0xFF);
+        type->value = mcbtypetrans[bit][type->value];
+        type->count = decodeUOvfSym(buftree, 0xFF);
     }
-    --type[1];
-    return type[0];
+    --type->count;
+    return type->value;
 }
 
-static uint32_t getMCBproc(BitBufferWithTree *buftree, uint32_t *proc)
+static uint32_t getMCBproc(BitBufferWithTree *buftree, struct RLDecoder *proc)
 {
-    if (proc[1] == 0)
+    if (proc->count == 0)
     {
-        proc[0] ^= 1;
-        proc[1] = decodeUOvfSym(buftree, 0xFF);
+        proc->value ^= 1;
+        proc->count = decodeUOvfSym(buftree, 0xFF);
     }
-    --proc[1];
-    return proc[0];
+    --proc->count;
+    return proc->value;
 }
 
 static void setMCNextBlk(MCPlane mcplanes[PLANE_COUNT])
@@ -1666,26 +1677,26 @@ static void decode_PB_cc(VideoState *state, MCPlane mcplanes[PLANE_COUNT], uint3
 
 static void spread_PB_descMap(SeqObj *seqobj, MCPlane mcplanes[PLANE_COUNT])
 {
-    uint32_t proc[2];
-    uint32_t type[2];
+    struct RLDecoder proc;
+    struct RLDecoder type;
     VideoState *state = seqobj->state;
-    initMCBproc(&state->mcb_proc, proc);
-    initMCBtype(&state->mcb_type, type);
+    initMCBproc(&state->mcb_proc, &proc);
+    initMCBtype(&state->mcb_type, &type);
     for (int i = 0; i < seqobj->height; i += 8)
     {
         setMCTop(mcplanes);
         for (int j = 0; j < seqobj->width; j += 8)
         {
-            getMCBtype(&state->mcb_type, type);
-            if (type[0] == 0)
+            getMCBtype(&state->mcb_type, &type);
+            if (type.value == 0)
             {
                 decode_PB_dc(state, mcplanes);
-                decode_PB_cc(state, mcplanes, 0, type[0]);
+                decode_PB_cc(state, mcplanes, 0, type.value);
             }
             else
             {
                 reset_PB_dc(mcplanes);
-                decode_PB_cc(state, mcplanes, getMCBproc(&state->mcb_proc, proc), type[0]);
+                decode_PB_cc(state, mcplanes, getMCBproc(&state->mcb_proc, &proc), type.value);
             }
             setMCNextBlk(mcplanes);
         }
