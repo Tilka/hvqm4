@@ -1576,6 +1576,8 @@ static uint32_t getMCBtype(BitBufferWithTree *buftree, struct RLDecoder *type)
 {
     if (type->count == 0)
     {
+        // only three possible values, so when the value changes,
+        // a single bit decides which other value to select
         // bit == 0 -> increment
         // bit == 1 -> decrement
         // then wrap to range 0..2
@@ -1646,7 +1648,7 @@ static void reset_PB_dc(MCPlane mcplanes[PLANE_COUNT])
 
 static void decode_PB_cc(VideoState *state, MCPlane mcplanes[PLANE_COUNT], uint32_t proc, uint32_t type)
 {
-    uint32_t r30 = (type << 5) | (proc << 4);
+    uint32_t block_type = (type << 5) | (proc << 4);
     if (proc == 1)
     {
         for (int i = 0; i < PLANE_COUNT; ++i)
@@ -1654,7 +1656,7 @@ static void decode_PB_cc(VideoState *state, MCPlane mcplanes[PLANE_COUNT], uint3
             BlockData *payload = mcplanes[i].payload_cur_blk;
             HVQPlaneDesc *plane = &state->planes[i];
             for (int j = 0; j < plane->block_size_in_samples; ++j)
-                payload[plane->some_half_array[j]].type = r30;
+                payload[plane->some_half_array[j]].type = block_type;
         }
         return;
     }
@@ -1668,17 +1670,17 @@ static void decode_PB_cc(VideoState *state, MCPlane mcplanes[PLANE_COUNT], uint3
             BlockData *ptr = mcplaneY->payload_cur_blk;
             if (mcplaneY->rle)
             {
-                ptr[planeY->some_half_array[i]].type = r30;
+                ptr[planeY->some_half_array[i]].type = block_type;
                 --mcplaneY->rle;
             }
             else
             {
                 int16_t huff = decodeHuff(&state->basis_num[LUMA_IDX]);
                 if (huff)
-                    ptr[planeY->some_half_array[i]].type = r30 | huff;
+                    ptr[planeY->some_half_array[i]].type = block_type | huff;
                 else
                 {
-                    ptr[planeY->some_half_array[i]].type = r30;
+                    ptr[planeY->some_half_array[i]].type = block_type;
                     mcplaneY->rle = decodeHuff(&state->basis_num_run[0]);
                 }
             }
@@ -1693,8 +1695,8 @@ static void decode_PB_cc(VideoState *state, MCPlane mcplanes[PLANE_COUNT], uint3
             BlockData *ptrV = mcplaneV->payload_cur_blk;
             if (mcplaneU->rle)
             {
-                ptrU[planeU->some_half_array[i]].type = r30;
-                ptrV[planeU->some_half_array[i]].type = r30;
+                ptrU[planeU->some_half_array[i]].type = block_type;
+                ptrV[planeU->some_half_array[i]].type = block_type;
                 --mcplaneU->rle;
             }
             else
@@ -1702,13 +1704,13 @@ static void decode_PB_cc(VideoState *state, MCPlane mcplanes[PLANE_COUNT], uint3
                 int16_t huff = decodeHuff(&state->basis_num[CHROMA_IDX]);
                 if (huff)
                 {
-                    ptrU[planeU->some_half_array[i]].type = r30 | ((huff >> 0) & 0xF);
-                    ptrV[planeU->some_half_array[i]].type = r30 | ((huff >> 4) & 0xF);
+                    ptrU[planeU->some_half_array[i]].type = block_type | ((huff >> 0) & 0xF);
+                    ptrV[planeU->some_half_array[i]].type = block_type | ((huff >> 4) & 0xF);
                 }
                 else
                 {
-                    ptrU[planeU->some_half_array[i]].type = r30;
-                    ptrV[planeU->some_half_array[i]].type = r30;
+                    ptrU[planeU->some_half_array[i]].type = block_type;
+                    ptrV[planeU->some_half_array[i]].type = block_type;
                     mcplaneU->rle = decodeHuff(&state->basis_num_run[1]);
                 }
             }
@@ -1775,20 +1777,20 @@ static void MCBlockDecDCNest(VideoState *state, MCPlane mcplanes[PLANE_COUNT])
         {
             // dst is a 4x4 region
             void *dst = mcplanes[plane_idx].top + plane->some_word_array[j];
-            int32_t r30 = plane->some_half_array[j];
-            uint32_t value = ptr[r30].value;
+            int32_t block_idx = plane->some_half_array[j];
+            uint32_t value = ptr[block_idx].value;
             // block type:
             // 0: weighted
             // 6: literal block
             // 8: single value
-            uint32_t type = ptr[r30].type & 0xF;
+            uint32_t type = ptr[block_idx].type & 0xF;
             // see also IpicBlockDec
             if (type == 0)
             {
-                uint8_t top    = ptr[r30 - line].type & 0x77 ? value : ptr[r30 - line].value;
-                uint8_t left   = ptr[r30 -    1].type & 0x77 ? value : ptr[r30 -    1].value;
-                uint8_t right  = ptr[r30 +    1].type & 0x77 ? value : ptr[r30 +    1].value;
-                uint8_t bottom = ptr[r30 + line].type & 0x77 ? value : ptr[r30 + line].value;
+                uint8_t top    = ptr[block_idx - line].type & 0x77 ? value : ptr[block_idx - line].value;
+                uint8_t left   = ptr[block_idx -    1].type & 0x77 ? value : ptr[block_idx -    1].value;
+                uint8_t right  = ptr[block_idx +    1].type & 0x77 ? value : ptr[block_idx +    1].value;
+                uint8_t bottom = ptr[block_idx + line].type & 0x77 ? value : ptr[block_idx + line].value;
                 WeightImBlock(dst, stride, value, top, bottom, left, right);
             }
             else if (type == 8)
@@ -1905,6 +1907,7 @@ static void BpicPlaneDec(SeqObj *seqobj, void *present, void *past, void *future
             // 0: intra
             // 1: inter - past
             // 2: inter - future
+            // see getMCBtype()
             int8_t new_reference_frame = (bits >> 5) & 3;
             if (new_reference_frame == 0)
             {
@@ -1925,7 +1928,9 @@ static void BpicPlaneDec(SeqObj *seqobj, void *present, void *past, void *future
                 }
                 getMVector(&mv_h, &state->mv_h, state->mc_residual_bits_h[reference_frame]);
                 getMVector(&mv_v, &state->mv_v, state->mc_residual_bits_v[reference_frame]);
-                if (((bits >> 4) & 1) == 0)
+                // see getMCBproc()
+                int mcb_proc = (bits >> 4) & 1;
+                if (mcb_proc == 0)
                     MCBlockDecMCNest(state, mcplanes, j*2 + mv_h, i*2 + mv_v);
                 else
                     MotionComp(state, mcplanes, j*2 + mv_h, i*2 + mv_v);
