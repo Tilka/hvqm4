@@ -4,7 +4,7 @@
 #include <inttypes.h>
 #include <string.h>
 
-/* .h4m (HVQM4 1.3/1.5) audio decoder 0.5
+/* .h4m (HVQM4 1.3/1.5) audio decoder 0.6
     by hcs with contributions from Nisto */
 
 //#define VERBOSE_PRINT
@@ -16,38 +16,7 @@
 #define HVQM4_AUDIO  0x00
 #define HVQM4_VIDEO  0x01
 
-static uint32_t read32(uint8_t *buf)
-{
-    uint32_t v = 0;
-    for (int i = 0; i < 4; i++)
-    {
-        v <<= 8;
-        v |= buf[i];
-    }
-    return v;
-}
-
-static uint32_t get32(FILE *infile)
-{
-    uint8_t buf[4];
-    if (4 != fread(buf, 1, 4, infile))
-    {
-        fprintf(stderr, "read error at 0x%lx\n", ftell(infile));
-        exit(EXIT_FAILURE);
-    }
-    return read32(buf);
-}
-
-static void put_32bitLE(uint8_t *buf, uint32_t v)
-{
-    for (unsigned int i = 0; i < 4; i++)
-    {
-        buf[i] = v & 0xFF;
-        v >>= 8;
-    }
-}
-
-static uint16_t read16(uint8_t *buf)
+static uint16_t get_u16_be(uint8_t *buf)
 {
     uint16_t v = 0;
     for (int i = 0; i < 2; i++)
@@ -58,18 +27,18 @@ static uint16_t read16(uint8_t *buf)
     return v;
 }
 
-static uint16_t get16(FILE *infile)
+static uint32_t get_u32_be(uint8_t *buf)
 {
-    uint8_t buf[2];
-    if (2 != fread(buf, 1, 2, infile))
+    uint32_t v = 0;
+    for (int i = 0; i < 4; i++)
     {
-        fprintf(stderr, "read error at 0x%lx\n", ftell(infile));
-        exit(EXIT_FAILURE);
+        v <<= 8;
+        v |= buf[i];
     }
-    return read16(buf);
+    return v;
 }
 
-static void put_16bitLE(uint8_t *buf, uint16_t v)
+static void put_u16_le(uint8_t *buf, uint16_t v)
 {
     for (unsigned int i = 0; i < 2; i++)
     {
@@ -78,11 +47,110 @@ static void put_16bitLE(uint8_t *buf, uint16_t v)
     }
 }
 
+static void put_u32_le(uint8_t *buf, uint32_t v)
+{
+    for (unsigned int i = 0; i < 4; i++)
+    {
+        buf[i] = v & 0xFF;
+        v >>= 8;
+    }
+}
+
+static uint16_t read_u16_be(FILE *infile)
+{
+    uint8_t buf[2];
+    if (2 != fread(buf, 1, 2, infile))
+    {
+        fprintf(stderr, "read error at 0x%lx\n", ftell(infile));
+        exit(EXIT_FAILURE);
+    }
+    return get_u16_be(buf);
+}
+
+static uint32_t read_u32_be(FILE *infile)
+{
+    uint8_t buf[4];
+    if (4 != fread(buf, 1, 4, infile))
+    {
+        fprintf(stderr, "read error at 0x%lx\n", ftell(infile));
+        exit(EXIT_FAILURE);
+    }
+    return get_u32_be(buf);
+}
+
+static void write_u8_be(FILE *outfile, uint8_t v)
+{
+    uint8_t buf[1];
+
+    buf[0] = v & 0xFF;
+
+    fwrite(buf, 1, 1, outfile);
+}
+
+static void write_u16_be(FILE *outfile, uint16_t v)
+{
+    uint8_t buf[2];
+
+    buf[0] = (v >> 8) & 0xFF;
+    buf[1] = (v >> 0) & 0xFF;
+
+    fwrite(buf, 1, 2, outfile);
+}
+
+static void write_u32_be(FILE *outfile, uint32_t v)
+{
+    uint8_t buf[4];
+
+    buf[0] = (v >> 24) & 0xFF;
+    buf[1] = (v >> 16) & 0xFF;
+    buf[2] = (v >>  8) & 0xFF;
+    buf[3] = (v >>  0) & 0xFF;
+
+    fwrite(buf, 1, 4, outfile);
+}
+
 static int16_t clamp16(int32_t v)
 {
     if (v > INT16_MAX) return INT16_MAX;
     else if (v < INT16_MIN) return INT16_MIN;
     return v;
+}
+
+/* substitute extension with replacement string */
+char *subext(char *path, const char *rep)
+{
+    int i, s = 0;
+    char *out;
+
+    /* scan from start up to basename (this ensures we're not grabbing something
+       that looks like an extension at the end of a folder name or something) */
+    for (i = 0; path[i]; i++) {
+        if (path[i] == '/' || path[i] == '\\') {
+            s = i + 1;
+        }
+    }
+
+    /* scan from basename up to extension */
+    for (i = s; path[i]; i++) {
+        if (path[i] == '.') {
+            s = i;
+        }
+    }
+
+    /* no extension; get full path */
+    if (path[s] != '.') {
+        s = i;
+    }
+
+    out = malloc(s + strlen(rep) + 1);
+
+    if (!out) return NULL;
+
+    memcpy(out, path, s);
+
+    strcpy(out + s, rep);
+
+    return out;
 }
 
 struct audio_state
@@ -297,7 +365,7 @@ static void decode_ima_adpcm(struct audio_state *state, uint8_t *input, int16_t 
         }
 
         for (int c = channels - 1; c >= 0; c--) {
-            put_16bitLE((uint8_t*)(output++), state->ch[c].hist);
+            put_u16_le((uint8_t*)(output++), state->ch[c].hist);
         }
 
         --sample_count;
@@ -319,7 +387,7 @@ static void decode_ima_adpcm(struct audio_state *state, uint8_t *input, int16_t 
 
             state->ch[c].idx = IMA_IndexTable[state->ch[c].idx][index];
 
-            put_16bitLE((uint8_t*)(output++), state->ch[c].hist);
+            put_u16_le((uint8_t*)(output++), state->ch[c].hist);
 
             if (c-- <= 0) {
                 c = channels - 1;
@@ -423,7 +491,7 @@ static void decode_adpcm8(struct audio_state *state, uint8_t *input, int16_t *ou
         }
 
         for (int c = channels - 1; c >= 0; c--) {
-            put_16bitLE((uint8_t*)(output++), state->ch[c].hist);
+            put_u16_le((uint8_t*)(output++), state->ch[c].hist);
         }
     }
 }
@@ -432,7 +500,7 @@ static void decode_pcm(uint8_t *input, int16_t *output, uint32_t sample_count, u
 {
     while (sample_count-- > 0) {
         for (int c = 0; c < channels; c++) {
-            put_16bitLE((uint8_t*)(output++), (*input++ << 8) | *input++);
+            put_u16_le((uint8_t*)(output++), (*input++ << 8) | *input++);
         }
     }
 }
@@ -487,22 +555,22 @@ static void load_header(struct HVQM4_header *header, uint8_t *raw_header)
         exit(EXIT_FAILURE);
     }
 
-    header->header_size = read32(&raw_header[0x10]);
-    header->body_size = read32(&raw_header[0x14]);
+    header->header_size = get_u32_be(&raw_header[0x10]);
+    header->body_size = get_u32_be(&raw_header[0x14]);
 
-    header->blocks = read32(&raw_header[0x18]);
+    header->blocks = get_u32_be(&raw_header[0x18]);
 
-    header->video_frames = read32(&raw_header[0x1C]);
-    header->audio_frames = read32(&raw_header[0x20]);
+    header->video_frames = get_u32_be(&raw_header[0x1C]);
+    header->audio_frames = get_u32_be(&raw_header[0x20]);
 
-    header->frame_interval = read32(&raw_header[0x24]);
-    header->max_video_frame_size = read32(&raw_header[0x28]);
+    header->frame_interval = get_u32_be(&raw_header[0x24]);
+    header->max_video_frame_size = get_u32_be(&raw_header[0x28]);
 
-    header->unk2C = read32(&raw_header[0x2C]);
-    header->max_audio_frame_size = read32(&raw_header[0x30]);
+    header->unk2C = get_u32_be(&raw_header[0x2C]);
+    header->max_audio_frame_size = get_u32_be(&raw_header[0x30]);
 
-    header->hres = read16(&raw_header[0x34]);
-    header->vres = read16(&raw_header[0x36]);
+    header->hres = get_u16_be(&raw_header[0x34]);
+    header->vres = get_u16_be(&raw_header[0x36]);
     header->h_srate = raw_header[0x38];
     header->v_srate = raw_header[0x39];
 
@@ -513,7 +581,7 @@ static void load_header(struct HVQM4_header *header, uint8_t *raw_header)
     header->audio_bitdepth = raw_header[0x3D];
     header->audio_format = raw_header[0x3E];
     header->audio_extra_tracks = raw_header[0x3F];
-    header->audio_srate = read32(&raw_header[0x40]);
+    header->audio_srate = get_u32_be(&raw_header[0x40]);
 
     if (header->header_size != 0x44) {
         fprintf(stderr, "unexpected header size!\n");
@@ -613,6 +681,36 @@ void display_header(struct HVQM4_header *header)
     printf("\n");
 }
 
+void write_header(FILE *file, struct HVQM4_header *header)
+{
+    if (header->version == HVQM4_13) {
+        fwrite(HVQM4_13_magic, 1, 16, file);
+    } else if (header->version == HVQM4_15) {
+        fwrite(HVQM4_15_magic, 1, 16, file);
+    }
+
+    write_u32_be(file, header->header_size);
+    write_u32_be(file, header->body_size);
+    write_u32_be(file, header->blocks);
+    write_u32_be(file, header->video_frames);
+    write_u32_be(file, header->audio_frames);
+    write_u32_be(file, header->frame_interval);
+    write_u32_be(file, header->max_video_frame_size);
+    write_u32_be(file, header->unk2C);
+    write_u32_be(file, header->max_audio_frame_size);
+    write_u16_be(file, header->hres);
+    write_u16_be(file, header->vres);
+    write_u8_be(file, header->h_srate);
+    write_u8_be(file, header->v_srate);
+    write_u8_be(file, header->unk3A);
+    write_u8_be(file, header->unk3B);
+    write_u8_be(file, header->audio_channels);
+    write_u8_be(file, header->audio_bitdepth);
+    write_u8_be(file, header->audio_format);
+    write_u8_be(file, header->audio_extra_tracks);
+    write_u32_be(file, header->audio_srate);
+}
+
 static void make_wav_header(uint8_t *buf, int32_t sample_count, int32_t sample_rate, int channels)
 {
     int32_t bytecount = sample_count * sizeof(int16_t) * channels;
@@ -621,7 +719,7 @@ static void make_wav_header(uint8_t *buf, int32_t sample_count, int32_t sample_r
     memcpy(buf+0x00, "RIFF", 4);
 
     /* size of RIFF */
-    put_32bitLE(buf+0x04, bytecount + 0x2C - 8);
+    put_u32_le(buf+0x04, bytecount + 0x2C - 8);
 
     /* WAVE header */
     memcpy(buf+0x08, "WAVE", 4);
@@ -630,25 +728,25 @@ static void make_wav_header(uint8_t *buf, int32_t sample_count, int32_t sample_r
     memcpy(buf+0x0C, "fmt ", 4);
 
     /* size of WAVE fmt chunk */
-    put_32bitLE(buf+0x10, 0x10);
+    put_u32_le(buf+0x10, 0x10);
 
     /* compression code 1=PCM */
-    put_16bitLE(buf+0x14, 1);
+    put_u16_le(buf+0x14, 1);
 
     /* channel count */
-    put_16bitLE(buf+0x16, channels);
+    put_u16_le(buf+0x16, channels);
 
     /* sample rate */
-    put_32bitLE(buf+0x18, sample_rate);
+    put_u32_le(buf+0x18, sample_rate);
 
     /* bytes per second */
-    put_32bitLE(buf+0x1C, sample_rate * sizeof(int16_t) * channels);
+    put_u32_le(buf+0x1C, sample_rate * sizeof(int16_t) * channels);
 
     /* block align */
-    put_16bitLE(buf+0x20, sizeof(int16_t) * channels);
+    put_u16_le(buf+0x20, sizeof(int16_t) * channels);
 
     /* significant bits per sample */
-    put_16bitLE(buf+0x22, sizeof(int16_t) * 8);
+    put_u16_le(buf+0x22, sizeof(int16_t) * 8);
 
     /* PCM has no extra format bytes, so we don't even need to specify a count */
 
@@ -656,44 +754,7 @@ static void make_wav_header(uint8_t *buf, int32_t sample_count, int32_t sample_r
     memcpy(buf+0x24, "data", 4);
 
     /* size of WAVE data chunk */
-    put_32bitLE(buf+0x28, bytecount);
-}
-
-/* substitute extension with replacement string */
-char *subext(char *path, const char *rep)
-{
-    int i, s = 0;
-    char *out;
-
-    /* scan from start up to basename (this ensures we're not grabbing something
-       that looks like an extension at the end of a folder name or something) */
-    for (i = 0; path[i]; i++) {
-        if (path[i] == '/' || path[i] == '\\') {
-            s = i + 1;
-        }
-    }
-
-    /* scan from basename up to extension */
-    for (i = s; path[i]; i++) {
-        if (path[i] == '.') {
-            s = i;
-        }
-    }
-
-    /* no extension; get full path */
-    if (path[s] != '.') {
-        s = i;
-    }
-
-    out = malloc(s + strlen(rep) + 1);
-
-    if (!out) return NULL;
-
-    memcpy(out, path, s);
-
-    strcpy(out + s, rep);
-
-    return out;
+    put_u32_le(buf+0x28, bytecount);
 }
 
 int is_audio_frame(uint16_t frame_type, uint16_t frame_format, int first_aud)
@@ -726,23 +787,32 @@ int is_video_frame(uint16_t frame_type, uint16_t frame_format, int first_vid)
 
 int main(int argc, char **argv)
 {
-    printf("h4m 'HVQM4 1.3/1.5' audio decoder 0.5\n");
+    printf("h4m 'HVQM4 1.3/1.5' audio decoder 0.6\n");
     printf("by hcs with contributions from Nisto\n\n");
     if (argc != 2 && argc != 3) {
-        fprintf(stderr, "usage: %s [-h] input.h4m\n", argv[0]);
-        fprintf(stderr, "specify -h to display header info without decoding\n");
+        fprintf(stderr, "Usage: %s [mode] <video>\n", argv[0]);
+        fprintf(stderr, "\n");
+        fprintf(stderr, "Modes:\n");
+        fprintf(stderr, "c : Convert audio to WAV (default)\n");
+        fprintf(stderr, "d : Demux audio (strip video frames)\n");
+        fprintf(stderr, "h : Display header info and exit\n");
         exit(EXIT_FAILURE);
     }
 
     char *inpath = argv[argc-1];
+
     FILE *infile = fopen(inpath, "rb");
+
+    FILE *outfile = NULL;
+
     if (!infile) {
         fprintf(stderr, "failed opening %s\n", inpath);
         exit(EXIT_FAILURE);
     }
 
     uint8_t raw_header[0x44];
-    if (0x44 != fread(&raw_header, 1, 0x44, infile)) {
+
+    if (sizeof(raw_header) != fread(raw_header, 1, sizeof(raw_header), infile)) {
         fprintf(stderr, "failed reading header\n");
         exit(EXIT_FAILURE);
     }
@@ -750,86 +820,132 @@ int main(int argc, char **argv)
     struct HVQM4_header header;
     load_header(&header, raw_header);
     display_header(&header);
-    if (argc > 2 && strcmp("-h", argv[1]) == 0) {
+
+    int mode;
+
+    if (argc == 2 || (argc == 3 && strcmp("c", argv[1]) == 0)) {
+        mode = 'c';
+    } else if (argc == 3 && strcmp("d", argv[1]) == 0) {
+        mode = 'd';
+    } else if (argc == 3 && strcmp("h", argv[1]) == 0) {
         fclose(infile);
         return 0;
+    } else {
+        fprintf(stderr, "invalid arguments!\n");
+        fclose(infile);
+        return 1;
     }
+
     if (header.audio_frames == 0) {
-        fprintf(stderr, "this video contains no audio!\n");
-        exit(EXIT_FAILURE);
+        printf("this video contains no audio!\n");
+        fclose(infile);
+        return -1;
     }
 
     uint8_t *input = calloc(header.max_audio_frame_size, sizeof(uint8_t));
+
     if (!input) {
         fprintf(stderr, "could not allocate input buffer!\n");
         exit(EXIT_FAILURE);
     }
 
-    int16_t *output = calloc(header.max_audio_frame_size, sizeof(int16_t) * header.audio_channels);
-    if (!output) {
-        fprintf(stderr, "could not allocate output buffer!\n");
-        exit(EXIT_FAILURE);
-    }
-
-    int total_tracks = 1 + header.audio_extra_tracks;
+    int16_t *decbuf = NULL;
 
     struct { 
         struct {
             FILE *f;
             char *path;
-            uint8_t header[0x2C];
             struct audio_state audio_state;
         } *track;
-    } outstreams;
+    } wavstreams = { 0 };
 
-    outstreams.track = calloc(total_tracks, sizeof(*outstreams.track));
- 
-    for (int i = 0; i < total_tracks; i++) {
-        char ext[8];
+    int total_tracks = 1 + header.audio_extra_tracks;
 
-        if (total_tracks > 1) {
-            sprintf(ext, "_%02d.wav", i);
-        } else {
-            strcpy(ext, ".wav");
-        }
+    if (mode == 'd') {
+        outfile = fopen(subext(inpath, "_audio_only.h4m"), "wb");
 
-        outstreams.track[i].path = subext(inpath, &ext[0]);
-        if (!outstreams.track[i].path) {
-            fprintf(stderr, "failed building output path for track %d\n", i);
+        if (!outfile) {
+            fprintf(stderr, "failed creating output file!\n");
             exit(EXIT_FAILURE);
         }
 
-        outstreams.track[i].f = fopen(outstreams.track[i].path, "wb");
-        if (!outstreams.track[i].f) {
-            fprintf(stderr, "failed creating output file for track %d\n", i);
+        if (sizeof(raw_header) != fwrite(&raw_header, 1, sizeof(raw_header), outfile)) {
+            fprintf(stderr, "failing writing temporary header to output file\n");
+            exit(EXIT_FAILURE);
+        }
+    } else {
+        decbuf = calloc(header.max_audio_frame_size, sizeof(int16_t) * header.audio_channels);
+
+        if (!decbuf) {
+            fprintf(stderr, "could not allocate output buffer!\n");
             exit(EXIT_FAILURE);
         }
 
-        if (0x2C != fwrite(outstreams.track[i].header, 1, 0x2C, outstreams.track[i].f)) {
-            fprintf(stderr, "failed writing RIFF header for track %d\n", i);
-            exit(EXIT_FAILURE);
+        wavstreams.track = calloc(total_tracks, sizeof(*wavstreams.track));
+
+        for (int i = 0; i < total_tracks; i++) {
+            char ext[8];
+
+            if (total_tracks > 1) {
+                sprintf(ext, "_%02d.wav", i);
+            } else {
+                strcpy(ext, ".wav");
+            }
+
+            wavstreams.track[i].path = subext(inpath, &ext[0]);
+
+            if (!wavstreams.track[i].path) {
+                fprintf(stderr, "failed building output path for track %d\n", i);
+                exit(EXIT_FAILURE);
+            }
+
+            wavstreams.track[i].f = fopen(wavstreams.track[i].path, "wb");
+
+            if (!wavstreams.track[i].f) {
+                fprintf(stderr, "failed creating output file for track %d\n", i);
+                exit(EXIT_FAILURE);
+            }
+
+            if (0x2C != fwrite(decbuf, 1, 0x2C, wavstreams.track[i].f)) {
+                fprintf(stderr, "failed writing temporary header for track %d\n", i);
+                exit(EXIT_FAILURE);
+            }
         }
     }
 
     uint32_t block_count = 0;
+    uint32_t non_audio_blocks = 0;
     uint32_t total_aud_frames = 0;
     uint32_t total_vid_frames = 0;
     uint32_t total_sample_count = 0;
 
     long last_block_size = 0;
+    long last_outblock_size = 0;
 
     while (block_count++ < header.blocks) {
         const long block_start = ftell(infile);
+        long outblock_start = block_start;
 
-        if (get32(infile) != last_block_size) {
+        if (mode == 'd') {
+            outblock_start = ftell(outfile);
+            write_u32_be(outfile, last_outblock_size);
+        } else {
+            for (int i = 0; i < total_tracks; i++) {
+                wavstreams.track[i].audio_state.ch = calloc(
+                    header.audio_channels, sizeof(*wavstreams.track[i].audio_state.ch)
+                );
+            }
+        }
+
+        if (read_u32_be(infile) != last_block_size) {
             fprintf(stderr, "last block size mismatch at 0x%lX\n", ftell(infile));
             exit(EXIT_FAILURE);
         }
 
-        const uint32_t expected_block_size = get32(infile);
-        const uint32_t expected_vid_frame_count = get32(infile);
-        const uint32_t expected_aud_frame_count = get32(infile);
-        const uint32_t block_header_unk0C = get32(infile);
+        const uint32_t expected_block_size = read_u32_be(infile);
+        const uint32_t expected_vid_frame_count = read_u32_be(infile);
+        const uint32_t expected_aud_frame_count = read_u32_be(infile);
+        const uint32_t block_header_unk0C = read_u32_be(infile);
 
         /* was believed to be EOS marker with fixed value 0x01000000,
            but it's 0 in a couple of Bomberman Jetters files? */
@@ -839,6 +955,15 @@ int main(int argc, char **argv)
         }
 
         const long data_start = ftell(infile);
+        long outdata_start = data_start;
+
+        if (mode == 'd' && expected_aud_frame_count > 0) {
+            write_u32_be(outfile, 0);
+            write_u32_be(outfile, 0);
+            write_u32_be(outfile, expected_aud_frame_count);
+            write_u32_be(outfile, block_header_unk0C);
+            outdata_start = ftell(outfile);
+        }
 
 #ifdef VERBOSE_PRINT
         printf("block %d starts at 0x%lx, length 0x%"PRIx32"\n", (int)block_count, block_start, expected_block_size);
@@ -847,21 +972,25 @@ int main(int argc, char **argv)
         int first_vid = 1, first_aud = 1, block_sample_count = 0;
         uint32_t vid_frame_count = 0, aud_frame_count = 0;
 
-        for (int i = 0; i < total_tracks; i++) {
-            outstreams.track[i].audio_state.ch = calloc( header.audio_channels, sizeof(*outstreams.track[i].audio_state.ch) );
-        }
-
         while (aud_frame_count < expected_aud_frame_count || vid_frame_count < expected_vid_frame_count) {
-            uint16_t frame_type = get16(infile);
-            uint16_t frame_format = get16(infile);
-            uint32_t frame_size = get32(infile);
+            uint16_t frame_type = read_u16_be(infile);
+            uint16_t frame_format = read_u16_be(infile);
+            uint32_t frame_size = read_u32_be(infile);
 
 #ifdef VERBOSE_PRINT
-            printf("frame id 0x%"PRIx16"/0x%"PRIx16", size 0x%"PRIx32"\n", frame_type,frame_format,frame_size);
+            printf("frame id 0x%"PRIx16"/0x%"PRIx16", size 0x%"PRIx32"\n", frame_type, frame_format, frame_size);
 #endif
 
             if ( is_audio_frame( frame_type, frame_format, first_aud ) ) {
-                uint32_t samples = get32(infile);
+                uint32_t samples = read_u32_be(infile);
+
+                if (mode == 'd') {
+                    write_u16_be(outfile, frame_type);
+                    write_u16_be(outfile, frame_format);
+                    write_u32_be(outfile, frame_size);
+                    write_u32_be(outfile, samples);
+                }
+
                 uint32_t audio_bytes = frame_size - 4;
 
                 if (header.audio_format & 0x80) {
@@ -878,22 +1007,29 @@ int main(int argc, char **argv)
                     exit(EXIT_FAILURE);
                 }
 
-                for (int i = 0; i < total_tracks; i++) {
-                    switch (header.audio_format & 0x7F) {
-                        case HVQM4_AUDIO_IMA_ADPCM:
-                            decode_ima_adpcm(&outstreams.track[i].audio_state, &input[audio_bytes/total_tracks*i], output, frame_format, samples, header.audio_channels);
-                            break;
-                        case HVQM4_AUDIO_PCM:
-                            decode_pcm(&input[audio_bytes/total_tracks*i], output, samples, header.audio_channels);
-                            break;
-                        case HVQM4_AUDIO_ADPCM8:
-                            decode_adpcm8(&outstreams.track[i].audio_state, &input[audio_bytes/total_tracks*i], output, frame_format, samples, header.audio_channels);
-                            break;
-                    }
-
-                    if (samples != fwrite(output, sizeof(int16_t) * header.audio_channels, samples, outstreams.track[i].f)) {
-                        fprintf(stderr, "failed writing %"PRIu32" samples to track %d (0x%lX)\n", samples, i, ftell(outstreams.track[i].f));
+                if (mode == 'd') {
+                    if (audio_bytes != fwrite(input, sizeof(uint8_t), audio_bytes, outfile)) {
+                        fprintf(stderr, "failed writing %"PRIu32" bytes (0x%lX)\n", audio_bytes, ftell(outfile));
                         exit(EXIT_FAILURE);
+                    }
+                } else {
+                    for (int i = 0; i < total_tracks; i++) {
+                        switch (header.audio_format & 0x7F) {
+                            case HVQM4_AUDIO_IMA_ADPCM:
+                                decode_ima_adpcm(&wavstreams.track[i].audio_state, &input[audio_bytes/total_tracks*i], decbuf, frame_format, samples, header.audio_channels);
+                                break;
+                            case HVQM4_AUDIO_PCM:
+                                decode_pcm(&input[audio_bytes/total_tracks*i], decbuf, samples, header.audio_channels);
+                                break;
+                            case HVQM4_AUDIO_ADPCM8:
+                                decode_adpcm8(&wavstreams.track[i].audio_state, &input[audio_bytes/total_tracks*i], decbuf, frame_format, samples, header.audio_channels);
+                                break;
+                        }
+
+                        if (samples != fwrite(decbuf, sizeof(int16_t) * header.audio_channels, samples, wavstreams.track[i].f)) {
+                            fprintf(stderr, "failed writing %"PRIu32" samples to track %d (0x%lX)\n", samples, i, ftell(wavstreams.track[i].f));
+                            exit(EXIT_FAILURE);
+                        }
                     }
                 }
 
@@ -924,10 +1060,6 @@ int main(int argc, char **argv)
             }
         }
 
-        for (int i = 0; i < total_tracks; i++) {
-            free(outstreams.track[i].audio_state.ch);
-        }
-
         if (expected_aud_frame_count != aud_frame_count || expected_vid_frame_count != vid_frame_count) {
             fprintf(stderr, "frame count mismatch\n");
             exit(EXIT_FAILURE);
@@ -945,6 +1077,24 @@ int main(int argc, char **argv)
         total_sample_count += block_sample_count;
 
         last_block_size = ftell(infile) - block_start;
+
+        if (mode == 'd') {
+            last_outblock_size = ftell(outfile) - outblock_start;
+
+            /* update expected block size */
+            if (aud_frame_count > 0) {
+                const long outblock_size = ftell(outfile) - outdata_start;
+                fseek(outfile, outblock_start+4, SEEK_SET);
+                write_u32_be(outfile, outblock_size);
+                fseek(outfile, 0, SEEK_END);
+            } else {
+                non_audio_blocks += 1;
+            }
+        } else {
+            for (int i = 0; i < total_tracks; i++) {
+                free(wavstreams.track[i].audio_state.ch);
+            }
+        }
     }
 
     if (total_aud_frames != header.audio_frames || total_vid_frames != header.video_frames) {
@@ -954,29 +1104,48 @@ int main(int argc, char **argv)
 
     printf("%"PRIu32" samples\n", total_sample_count);
 
-    /* finalize output */
-    for (int i = 0; i < total_tracks; i++) {
-        make_wav_header(outstreams.track[i].header, total_sample_count, header.audio_srate, header.audio_channels);
+    free(input);
 
-        fseek(outstreams.track[i].f, 0, SEEK_SET);
+    if (mode == 'd') {
+        header.body_size = ftell(outfile) - 0x44;
+        header.blocks -= non_audio_blocks;
+        header.video_frames = 0;
+        header.max_video_frame_size = 0;
+        header.hres = 0;
+        header.vres = 0;
+        header.h_srate = 0;
+        header.v_srate = 0;
+        fseek(outfile, 0, SEEK_SET);
+        write_header(outfile, &header);
+        fclose(outfile);
+    } else {
+        uint8_t wav_header[0x2C];
 
-        if (0x2C != fwrite(&outstreams.track[i].header, 1, 0x2C, outstreams.track[i].f)) {
-            fprintf(stderr, "error rewriting riff header\n");
-            exit(EXIT_FAILURE);
+        free(decbuf);
+
+        /* finalize output */
+        for (int i = 0; i < total_tracks; i++) {
+            make_wav_header(wav_header, total_sample_count, header.audio_srate, header.audio_channels);
+
+            fseek(wavstreams.track[i].f, 0, SEEK_SET);
+
+            if (sizeof(wav_header) != fwrite(&wav_header, 1, sizeof(wav_header), wavstreams.track[i].f)) {
+                fprintf(stderr, "could not updating WAV header\n");
+                exit(EXIT_FAILURE);
+            }
+
+            if (EOF == fclose(wavstreams.track[i].f)) {
+                fprintf(stderr, "could not close output file for track %d\n", i);
+                exit(EXIT_FAILURE);
+            }
+
+            free(wavstreams.track[i].path);
         }
-
-        if (EOF == fclose(outstreams.track[i].f)) {
-            fprintf(stderr, "error closing output file for track %d\n", i);
-            exit(EXIT_FAILURE);
-        }
-
-        free(outstreams.track[i].path);
     }
 
-    free(input);
-    free(output);
+    fclose(infile);
 
-    printf("Done!\n");
+    printf("done!\n");
 
     return 0;
 }
