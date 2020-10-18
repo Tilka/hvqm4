@@ -470,7 +470,7 @@ typedef struct
     BitBufferWithTree bufTree0[PLANE_COUNT];
     BitBufferWithTree basis_num[LUMA_CHROMA];
     BitBufferWithTree basis_num_run[LUMA_CHROMA];
-    BitBuffer fixvl[PLANE_COUNT]; // high-entropy data
+    BitBuffer fixvl[PLANE_COUNT]; // uncompressed high-entropy data
     BitBufferWithTree mv_h; // horizontal motion vectors
     BitBufferWithTree mv_v; // vertical motion vectors
     BitBufferWithTree mcb_proc; // macroblock proc
@@ -675,31 +675,38 @@ static int32_t decodeUOvfSym(BitBufferWithTree *buf, int32_t cmp_value)
 static uint32_t GetAotBasis(VideoState *state, uint8_t basis_out[4][4], int32_t *sum, uint8_t const *nest_data, uint32_t nest_stride, uint32_t plane_idx)
 {
     BitBuffer *buf = &state->fixvl[plane_idx];
-    // 0x003F: big      : 6
-    // 0x07C0: small    : 5
-    // 0x0800: x stride : 1
-    // 0x1000: y stride : 1
+
+    // the nest size 70x38 is chosen to allow for
+    // 6/5-bit coordinates (0..63 x 0..31) + largest sampling pattern (6x6) = 0..69 x 0..37
+    // 0x003F: offset70 : 6
+    // 0x07C0: offset38 : 5
+    // 0x0800: stride70 : 1
+    // 0x1000: stride38 : 1
     // 0x6000: offset   : 2
     // 0x8000: negated  : 1
     uint16_t bits = read16(buf->ptr);
     buf->ptr += 2;
 
-    // compute the DC nest offset
+    // compute the offset inside the nest
     uint32_t x_stride, y_stride;
-    uint32_t big = bits & 0x3F;
-    uint32_t small = (bits >> 6) & 0x1F;
+    uint32_t offset70 = bits & 0x3F;
+    uint32_t offset38 = (bits >> 6) & 0x1F;
+    uint32_t stride70 = (bits >> 11) & 1;
+    uint32_t stride38 = (bits >> 12) & 1;
     if (state->is_landscape)
     {
-        nest_data += nest_stride * small + big;
-        x_stride =           1 << ((bits >> 11) & 1);
-        y_stride = nest_stride << ((bits >> 12) & 1);
+        nest_data += nest_stride * offset38 + offset70;
+        x_stride =           1 << stride70;
+        y_stride = nest_stride << stride38;
     }
     else
     {
-        nest_data += nest_stride * big + small;
-        x_stride =           1 << ((bits >> 12) & 1);
-        y_stride = nest_stride << ((bits >> 11) & 1);
+        nest_data += nest_stride * offset70 + offset38;
+        x_stride =           1 << stride38;
+        y_stride = nest_stride << stride70;
     }
+
+    // copy basis vector from the nest
     uint8_t min = nest_data[0];
     uint8_t max = nest_data[0];
     for (int y = 0; y < 4; ++y)
@@ -1158,6 +1165,7 @@ static void MakeNest(VideoState *state, uint16_t nest_x, uint16_t nest_y)
 
     if (y_plane->h_blocks < state->h_nest_size)
     {
+        // special case if the video is less than 280 pixels wide (assuming landscape mode)
         h_nest_blocks = y_plane->h_blocks;
         h_mirror = state->h_nest_size - y_plane->h_blocks;
         if (h_mirror > y_plane->h_blocks)
@@ -1173,6 +1181,7 @@ static void MakeNest(VideoState *state, uint16_t nest_x, uint16_t nest_y)
 
     if (y_plane->v_blocks < state->v_nest_size)
     {
+        // special case if the video is less than 152 pixels high
         v_nest_blocks = y_plane->v_blocks;
         v_mirror = state->v_nest_size - y_plane->v_blocks;
         if (v_mirror > y_plane->v_blocks)
@@ -1195,16 +1204,19 @@ static void MakeNest(VideoState *state, uint16_t nest_x, uint16_t nest_y)
             *nest++ = (p->value >> 4) & 0xF;
             ++p;
         }
+        // if the video is too small, mirror it
         for (int j = 0; j < h_mirror; ++j)
         {
             --p;
             *nest++ = (p->value >> 4) & 0xF;
         }
+        // if it is still too small, null out the rest
         for (int j = 0; j < h_empty; ++j)
             *nest++ = 0;
         ptr += y_plane->h_blocks_safe;
     }
 
+    // handle vertical mirroring
     uint8_t const *nest2 = nest - state->h_nest_size;
     for (int i = 0; i < v_mirror; ++i)
     {
@@ -1213,6 +1225,7 @@ static void MakeNest(VideoState *state, uint16_t nest_x, uint16_t nest_y)
         nest2 -= state->h_nest_size;
     }
 
+    // and vertical nulling
     for (int i = 0; i < v_empty; ++i)
         for (int j = 0; j < state->h_nest_size; ++j)
             *nest++ = 0;
@@ -1343,6 +1356,7 @@ static void IntraAotBlock(VideoState *state, uint8_t *dst, uint32_t stride, uint
         return;
     }
     int32_t result[4][4];
+    // block types 1..5 serve as number of bases to use, 9..15 are unused
     int32_t aotAverage = GetAotSum(state, result, block_type, state->nest_data, state->h_nest_size, plane_idx);
     int32_t delta = (replacementAverage << state->unk_shift) - aotAverage;
     for (int y = 0; y < 4; ++y)
@@ -1416,6 +1430,7 @@ static void IpicBlockDec(VideoState *state, uint8_t *dst, uint32_t stride, Stack
         uint8_t top    = stack_state->line_prev->type & 0x77 ? stack_state->curr.value : stack_state->line_prev->value;
         uint8_t bottom = stack_state->line_next->type & 0x77 ? stack_state->curr.value : stack_state->line_next->value;
         uint8_t right  = stack_state->next.type       & 0x77 ? stack_state->curr.value : stack_state->next.value;
+        // the left value is tracked manually, the logic is equivalent with the other surrounding values
         uint8_t left   = stack_state->value_prev;
         WeightImBlock(dst, stride, stack_state->curr.value, top, bottom, left, right);
         stack_state->value_prev = stack_state->curr.value;
@@ -1428,7 +1443,8 @@ static void IpicBlockDec(VideoState *state, uint8_t *dst, uint32_t stride, Stack
     else
     {
         IntraAotBlock(state, dst, stride, stack_state->curr.value, stack_state->curr.type, stack_state->plane_idx);
-        stack_state->value_prev = stack_state->next.value; // ?!
+        // don't use the current DC value to predict the next one
+        stack_state->value_prev = stack_state->next.value;
     }
     // next block
     ++stack_state->line_prev;
@@ -1774,7 +1790,7 @@ static void MCBlockDecDCNest(VideoState *state, MCPlane mcplanes[PLANE_COUNT])
         for (int j = 0; j < plane->block_size_in_samples; ++j)
         {
             // dst is a 4x4 region
-            void *dst = mcplanes[plane_idx].top + plane->some_word_array[j];
+            uint8_t *dst = mcplanes[plane_idx].top + plane->some_word_array[j];
             int32_t block_idx = plane->some_half_array[j];
             uint32_t value = ptr[block_idx].value;
             // block type:
@@ -1963,7 +1979,8 @@ static void HVQM4DecodeIpic(SeqObj *seqobj, uint8_t const *frame, void *present)
     {
         setCode(&state->dc_rle[i].buf, data + read32(frame)); frame += 4;
     }
-    // multiple structures share the same tree, we only need to initialize one of each
+    // multiple BitBufferWithTree instances share the same Tree,
+    // the first BitBuffer of each group contains the Tree itself
     readTree(&state->basis_num[0], 0, 0);
     readTree(&state->basis_num_run[0], 0, 0);
     readTree(&state->dc_values[0], 1, scale);
@@ -1972,8 +1989,11 @@ static void HVQM4DecodeIpic(SeqObj *seqobj, uint8_t const *frame, void *present)
     state->boundB = +0x7F << scale;
     state->boundA = -0x80 << scale;
 
+    // 4x4 block types
     Ipic_BasisNumDec(state);
+    // 4x4 block DC values
     IpicDcvDec(state);
+    // 70x38 nest copied from upper 4 bits of DC values somewhere in the luma plane
     MakeNest(state, nest_x, nest_y);
 
     for (int i = 0; i < PLANE_COUNT; ++i)
