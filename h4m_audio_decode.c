@@ -1120,21 +1120,21 @@ static void IpicDcvDec(VideoState *state)
     {
         HVQPlaneDesc *plane = &state->planes[plane_idx];
         uint32_t rle = 0;
-        uint32_t v_blocks = plane->v_blocks;
+        const uint32_t v_blocks = plane->v_blocks;
         BlockData *curr = plane->payload;
-        while (v_blocks--)
+        for (uint32_t y = 0; y < v_blocks; ++y)
         {
             // pointer to previous line
             BlockData const *prev = curr - plane->h_blocks_safe;
             // first prediction on a line is only the previous line's value
             uint8_t value = prev->value;
-            for (uint32_t i = 0; i < plane->h_blocks; ++i)
+            for (uint32_t x = 0; x < plane->h_blocks; ++x)
             {
                 value += getDeltaDC(state, plane_idx, &rle);
                 curr->value = value;
                 ++curr;
                 ++prev;
-                // next prediction on this line is the mean of left and top values
+                // next prediction on this line is the mean of left (current) and top values
                 // +---+---+
                 // |   | T |
                 // +---+---+
@@ -1145,7 +1145,6 @@ static void IpicDcvDec(VideoState *state)
             // skip right border of this line and left border of next line
             curr += 2;
         }
-        //dumpPlanes(state, "filled");
     }
 }
 
