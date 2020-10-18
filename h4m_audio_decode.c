@@ -1854,11 +1854,11 @@ static void getMVector(int32_t *result, BitBufferWithTree *buf, int32_t residual
 
 static void MCBlockDecMCNest(VideoState *state, MCPlane mcplanes[PLANE_COUNT], int32_t x, int32_t y)
 {
-    void *target;
+    void *nest_data;
     if (state->is_landscape)
-        target = mcplanes[0].target + x/2 + (y/2 - 16)*state->planes[0].width_in_samples - 32;
+        nest_data = mcplanes[0].target + x/2 + (y/2 - 16)*state->planes[0].width_in_samples - 32;
     else
-        target = mcplanes[0].target + x/2 + (y/2 - 32)*state->planes[0].width_in_samples - 16;
+        nest_data = mcplanes[0].target + x/2 + (y/2 - 32)*state->planes[0].width_in_samples - 16;
     uint32_t hpel_dx = x & 1;
     uint32_t hpel_dy = y & 1;
     for (int plane_idx = 0; plane_idx < PLANE_COUNT; ++plane_idx)
@@ -1895,7 +1895,7 @@ static void MCBlockDecMCNest(VideoState *state, MCPlane mcplanes[PLANE_COUNT], i
                 else
                 {
                     uint32_t strideY = state->planes[0].width_in_samples;
-                    PrediAotBlock(state, dst, src, stride, block_type, target, strideY, plane_idx, hpel_dx, hpel_dy);
+                    PrediAotBlock(state, dst, src, stride, block_type, nest_data, strideY, plane_idx, hpel_dx, hpel_dy);
                 }
             }
         }
@@ -1911,7 +1911,7 @@ static void BpicPlaneDec(SeqObj *seqobj, void *present, void *past, void *future
     resetMCHandler(state, mcplanes, present);
     int32_t mv_h, mv_v;
     int32_t reference_frame = -1;
-    // blocks are 8x8 samples
+    // MC blocks are 8x8 pixels
     for (int i = 0; i < seqobj->height; i += 8)
     {
         setMCTop(mcplanes);
