@@ -488,15 +488,15 @@ typedef struct
     uint8_t nest_data[70 * 38]; // 1.3: 0x3261 1.5: 0x6261
 #if defined(VERSION_1_3) && !defined(FROGGER)
     uint8_t padding;
-    uint16_t boundB; // 0x3CC6
-    uint16_t boundA; // 0x3CC8
+    uint16_t dc_max; // 0x3CC6
+    uint16_t dc_min; // 0x3CC8
 #else
     uint8_t padding[3];
-    uint32_t boundB; // 0x6CC8
-    uint32_t boundA; // 0x6CCC
+    uint32_t dc_max; // 0x6CC8
+    uint32_t dc_min; // 0x6CCC
 #endif
     uint8_t unk_shift; // 1.3: 0x3CCA 1.5: 0x6CD0
-    uint8_t unk6CD1; // 0x6CD1
+    uint8_t dc_shift; // 0x6CD1
     // number of residual bits to read from mv_h/mv_v,
     // one setting for each of past and future
     uint8_t mc_residual_bits_h[2]; // 0x6CD2
@@ -507,12 +507,8 @@ typedef struct
 } VideoState;
 #ifndef NATIVE
 #if defined(VERSION_1_3) && !defined(FROGGER)
-_Static_assert(offsetof(VideoState, boundB) == 0x3CC6, "");
-_Static_assert(offsetof(VideoState, unk_shift) == 0x3CCA, "");
 _Static_assert(sizeof(VideoState) == 0x3CD0, "sizeof(VideoState) is incorrect");
 #else
-_Static_assert(offsetof(VideoState, boundB) == 0x6CC8, "");
-_Static_assert(offsetof(VideoState, unk_shift) == 0x6CD0, "");
 _Static_assert(sizeof(VideoState) == 0x6CD8, "sizeof(VideoState) is incorrect");
 #endif
 #endif
@@ -654,7 +650,8 @@ static uint32_t decodeHuff(BitBufferWithTree *buf)
     return tree->array[0][pos];
 }
 
-static int32_t decodeSOvfSym(BitBufferWithTree *buf, int32_t a, int32_t b)
+// used for DC values
+static int32_t decodeSOvfSym(BitBufferWithTree *buf, int32_t min, int32_t max)
 {
     int32_t sum = 0;
     int32_t value;
@@ -662,11 +659,12 @@ static int32_t decodeSOvfSym(BitBufferWithTree *buf, int32_t a, int32_t b)
     {
         value = decodeHuff(buf);
         sum += value;
-    } while (value <= a || value >= b);
+    } while (value <= min || value >= max);
     return sum;
 }
 
-static int32_t decodeUOvfSym(BitBufferWithTree *buf, int32_t cmp_value)
+// used for MCB proc/type, max is always 255
+static int32_t decodeUOvfSym(BitBufferWithTree *buf, int32_t max)
 {
     int32_t sum = 0;
     int32_t value;
@@ -674,7 +672,7 @@ static int32_t decodeUOvfSym(BitBufferWithTree *buf, int32_t cmp_value)
     {
         value = decodeHuff(buf);
         sum += value;
-    } while (value >= cmp_value);
+    } while (value >= max);
     return sum;
 }
 
@@ -1044,7 +1042,7 @@ static uint32_t getDeltaDC(VideoState *state, uint32_t plane_idx, uint32_t *rle)
 {
     if (*rle == 0)
     {
-        uint32_t delta = decodeSOvfSym(&state->dc_values[plane_idx], state->boundA, state->boundB);
+        uint32_t delta = decodeSOvfSym(&state->dc_values[plane_idx], state->dc_min, state->dc_max);
         // successive zeroes are run-length encoded
         if (delta == 0)
             *rle = decodeHuff(&state->dc_rle[plane_idx]);
@@ -1402,8 +1400,8 @@ static void PrediAotBlock(VideoState *state, uint8_t *dst, uint8_t const *src, u
             max = value > max ? value : max;
         }
     }
-    uint32_t r28 = (decodeSOvfSym(&state->dc_values[plane_idx], state->boundA, state->boundB) >> state->unk6CD1 << state->unk_shift) - aot_sum;
-    uint32_t bla = (decodeSOvfSym(&state->dc_values[plane_idx], state->boundA, state->boundB) >> state->unk6CD1);
+    uint32_t r28 = (decodeSOvfSym(&state->dc_values[plane_idx], state->dc_min, state->dc_max) >> state->dc_shift << state->unk_shift) - aot_sum;
+    uint32_t bla = (decodeSOvfSym(&state->dc_values[plane_idx], state->dc_min, state->dc_max) >> state->dc_shift);
     uint32_t r18 = bla * mcdivTable[max - min];
     for (int i = 0; i < 4; ++i)
         for (int j = 0; j < 4; ++j)
@@ -1654,7 +1652,7 @@ static void decode_PB_dc(VideoState *state, MCPlane mcplanes[PLANE_COUNT])
         MCPlane *mcplane = &mcplanes[i];
         for (int j = 0; j < plane->blocks_per_mcb; ++j)
         {
-            mcplane->pb_dc += decodeSOvfSym(&state->dc_values[i], state->boundA, state->boundB);
+            mcplane->pb_dc += decodeSOvfSym(&state->dc_values[i], state->dc_min, state->dc_max);
             BlockData *payload = mcplane->payload_cur_blk;
             payload[plane->mcb_offset[j]].value = mcplane->pb_dc;
         }
@@ -1965,7 +1963,7 @@ static void BpicPlaneDec(SeqObj *seqobj, void *present, void *past, void *future
 static void HVQM4DecodeIpic(SeqObj *seqobj, uint8_t const *frame, void *present)
 {
     VideoState *state = seqobj->state;
-    uint8_t scale = *frame++;
+    uint8_t dc_shift = *frame++;
     state->unk_shift = *frame++;
     frame += 2; // unused, seems to be always zero
     uint16_t nest_x = read16(frame); frame += 2;
@@ -1990,11 +1988,11 @@ static void HVQM4DecodeIpic(SeqObj *seqobj, uint8_t const *frame, void *present)
     // the first BitBuffer of each group contains the Tree itself
     readTree(&state->basis_num[0], 0, 0);
     readTree(&state->basis_num_run[0], 0, 0);
-    readTree(&state->dc_values[0], 1, scale);
+    readTree(&state->dc_values[0], 1, dc_shift);
     readTree(&state->bufTree0[0], 0, 2);
 
-    state->boundB = +0x7F << scale;
-    state->boundA = -0x80 << scale;
+    state->dc_max = +0x7F << dc_shift;
+    state->dc_min = -0x80 << dc_shift;
 
     // 4x4 block types
     Ipic_BasisNumDec(state);
@@ -2013,8 +2011,8 @@ static void HVQM4DecodeIpic(SeqObj *seqobj, uint8_t const *frame, void *present)
 static void HVQM4DecodeBpic(SeqObj *seqobj, uint8_t const *frame, void *present, void *past, void *future)
 {
     VideoState *state = seqobj->state;
+    state->dc_shift = frame[0];
     state->unk_shift = frame[1];
-    state->unk6CD1 = frame[0];
     state->mc_residual_bits_h[0] = frame[2];
     state->mc_residual_bits_v[0] = frame[3];
     state->mc_residual_bits_h[1] = frame[4];
@@ -2039,13 +2037,13 @@ static void HVQM4DecodeBpic(SeqObj *seqobj, uint8_t const *frame, void *present,
     setCode(&state->mcb_proc.buf, data + read32(frame)); frame += 4;
     readTree(&state->basis_num[0], 0, 0);
     readTree(&state->basis_num_run[0], 0, 0);
-    readTree(&state->dc_values[0], 1, state->unk6CD1);
+    readTree(&state->dc_values[0], 1, state->dc_shift);
     readTree(&state->bufTree0[0], 0, 2);
     readTree(&state->mv_h, 1, 0);
     readTree(&state->mcb_type, 0, 0);
 
-    state->boundB = +0x7F << state->unk6CD1;
-    state->boundA = -0x80 << state->unk6CD1;
+    state->dc_max = +0x7F << state->dc_shift;
+    state->dc_min = -0x80 << state->dc_shift;
 
     BpicPlaneDec(seqobj, present, past, future);
 }
