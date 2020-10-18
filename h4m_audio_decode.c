@@ -444,16 +444,23 @@ typedef struct
     uint16_t v_blocks; // A-B
     uint16_t h_blocks_safe; // C-D
     uint16_t v_blocks_safe; // E-F
-    uint16_t some_half_array[4]; // 10-17
-    uint32_t some_word_array[4]; // 18-27
+    // offsets of PBs within one MCB
+    // +---+---+
+    // | 0 | 3 |
+    // +---+---+
+    // | 1 | 2 |
+    // +---+---+
+    uint16_t mcb_offset[4]; // 10-17
+    // same for samples within one PB
+    uint32_t pb_offset[4]; // 18-27
     uint16_t width_in_samples; // 28-29
     uint16_t height_in_samples; // 2A-2B
     uint32_t size_in_samples; // 2C-2F
     uint8_t width_shift; // 30
     uint8_t height_shift; // 31
-    uint8_t h_samp_per_block; // 32  1..2
-    uint8_t v_samp_per_block; // 33  1..2
-    uint8_t block_size_in_samples; // 34  1..4
+    uint8_t pb_per_mcb_x; // 32  1..2
+    uint8_t pb_per_mcb_y; // 33  1..2
+    uint8_t blocks_per_mcb; // 34  1..4
     uint8_t padding[3]; // 35-37
 } HVQPlaneDesc;
 #ifndef NATIVE
@@ -517,7 +524,6 @@ typedef struct
     uint16_t height; // 6-7
     uint8_t h_samp; // 8
     uint8_t v_samp; // 9
-    uint16_t unkA; // unused?
 } SeqObj;
 
 typedef struct
@@ -789,14 +795,14 @@ static int32_t GetAotSum(VideoState *state, int32_t result[4][4], uint8_t num_ba
     return sum >> 4;
 }
 
-static int32_t GetMCAotSum(VideoState *state, int32_t result[4][4], uint8_t count, uint8_t const *nest_data, uint32_t nest_stride, uint32_t plane_idx)
+static int32_t GetMCAotSum(VideoState *state, int32_t result[4][4], uint8_t num_bases, uint8_t const *nest_data, uint32_t nest_stride, uint32_t plane_idx)
 {
     for (int i = 0; i < 4; ++i)
         for (int j = 0; j < 4; ++j)
             result[i][j] = 0;
     uint8_t byte_result[4][4];
     int32_t temp = 0;
-    for (int k = 0; k < count; ++k)
+    for (int k = 0; k < num_bases; ++k)
     {
         uint32_t factor = GetMCAotBasis(state, byte_result, &temp, nest_data, nest_stride, plane_idx);
         for (int i = 0; i < 4; ++i)
@@ -843,23 +849,24 @@ static void setHVQPlaneDesc(SeqObj *seqobj, uint8_t plane_idx, uint8_t h_samp, u
     plane->height_in_samples = seqobj->height >> plane->height_shift;
     plane->size_in_samples = plane->width_in_samples * plane->height_in_samples;
     // pixels per 2x2 block
-    plane->h_samp_per_block = 2 >> plane->width_shift;  // 1..2
-    plane->v_samp_per_block = 2 >> plane->height_shift; // 1..2
-    plane->block_size_in_samples = plane->h_samp_per_block * plane->v_samp_per_block; // 1..4
+    plane->pb_per_mcb_x = 2 >> plane->width_shift;  // 1..2
+    plane->pb_per_mcb_y = 2 >> plane->height_shift; // 1..2
+    plane->blocks_per_mcb = plane->pb_per_mcb_x * plane->pb_per_mcb_y; // 1..4
     // number of 4x4 blocks
     plane->h_blocks = seqobj->width / (h_samp * 4);
     plane->v_blocks = seqobj->height / (v_samp * 4);
     // number of 4x4 blocks + border
     plane->h_blocks_safe = plane->h_blocks + 2;
     plane->v_blocks_safe = plane->v_blocks + 2;
-    plane->some_half_array[0] = 0;
-    plane->some_half_array[1] = plane->h_blocks_safe;
-    plane->some_half_array[2] = plane->h_blocks_safe + 1;
-    plane->some_half_array[3] = 1;
-    plane->some_word_array[0] = 0;
-    plane->some_word_array[1] = plane->width_in_samples << 2;
-    plane->some_word_array[2] = (plane->width_in_samples << 2) + 4;
-    plane->some_word_array[3] = 4;
+    // offset of blocks in MCB
+    plane->mcb_offset[0] = 0;
+    plane->mcb_offset[1] = plane->h_blocks_safe;
+    plane->mcb_offset[2] = plane->h_blocks_safe + 1;
+    plane->mcb_offset[3] = 1;
+    plane->pb_offset[0] = 0;
+    plane->pb_offset[1] = plane->width_in_samples << 2;
+    plane->pb_offset[2] = (plane->width_in_samples << 2) + 4;
+    plane->pb_offset[3] = 4;
 }
 
 // HACK: assumes 4:2:0
@@ -1310,7 +1317,7 @@ typedef struct
     uint16_t h_mcb_stride;
     uint16_t padding; // ?
     uint32_t v_mcb_stride;
-    uint32_t h_samp_per_block;
+    uint32_t pb_per_mcb_x;
     uint32_t stride;
 } MCPlane;
 #ifndef NATIVE
@@ -1335,11 +1342,11 @@ static void MotionComp(VideoState *state, MCPlane mcplanes[PLANE_COUNT], int32_t
         }
 #endif
         void *ptr = mcplane->target + (plane_dy >> 1) * plane->width_in_samples + (plane_dx >> 1);
-        for (int j = 0; j < plane->block_size_in_samples; ++j)
+        for (int j = 0; j < plane->blocks_per_mcb; ++j)
         {
-            _MotionComp(mcplane->top + plane->some_word_array[j],
+            _MotionComp(mcplane->top + plane->pb_offset[j],
                         plane->width_in_samples,
-                        ptr + plane->some_word_array[j],
+                        ptr + plane->pb_offset[j],
                         plane->width_in_samples,
                         hpel_dx,
                         hpel_dy);
@@ -1525,8 +1532,8 @@ static void initMCHandler(VideoState *state, MCPlane mcplanes[PLANE_COUNT], void
         mcplane->payload_cur_row = plane->payload;
         mcplane->h_mcb_stride = 8 >> plane->width_shift;
         mcplane->v_mcb_stride = plane->width_in_samples * (8 >> plane->height_shift);
-        mcplane->h_samp_per_block = plane->h_samp_per_block;
-        mcplane->stride = plane->h_blocks_safe * plane->v_samp_per_block;
+        mcplane->pb_per_mcb_x = plane->pb_per_mcb_x;
+        mcplane->stride = plane->h_blocks_safe * plane->pb_per_mcb_y;
 
         present += plane->size_in_samples;
         past    += plane->size_in_samples;
@@ -1621,7 +1628,7 @@ static void setMCNextBlk(MCPlane mcplanes[PLANE_COUNT])
     for (int i = 0; i < PLANE_COUNT; ++i)
     {
         mcplanes[i].top += mcplanes[i].h_mcb_stride;
-        mcplanes[i].payload_cur_blk += mcplanes[i].h_samp_per_block;
+        mcplanes[i].payload_cur_blk += mcplanes[i].pb_per_mcb_x;
     }
 }
 
@@ -1645,11 +1652,11 @@ static void decode_PB_dc(VideoState *state, MCPlane mcplanes[PLANE_COUNT])
     {
         HVQPlaneDesc *plane = &state->planes[i];
         MCPlane *mcplane = &mcplanes[i];
-        for (int j = 0; j < plane->block_size_in_samples; ++j)
+        for (int j = 0; j < plane->blocks_per_mcb; ++j)
         {
             mcplane->pb_dc += decodeSOvfSym(&state->dc_values[i], state->boundA, state->boundB);
             BlockData *payload = mcplane->payload_cur_blk;
-            payload[plane->some_half_array[j]].value = mcplane->pb_dc;
+            payload[plane->mcb_offset[j]].value = mcplane->pb_dc;
         }
     }
 }
@@ -1669,8 +1676,8 @@ static void decode_PB_cc(VideoState *state, MCPlane mcplanes[PLANE_COUNT], uint3
         {
             BlockData *payload = mcplanes[i].payload_cur_blk;
             HVQPlaneDesc *plane = &state->planes[i];
-            for (int j = 0; j < plane->block_size_in_samples; ++j)
-                payload[plane->some_half_array[j]].type = block_type;
+            for (int j = 0; j < plane->blocks_per_mcb; ++j)
+                payload[plane->mcb_offset[j]].type = block_type;
         }
         return;
     }
@@ -1679,22 +1686,22 @@ static void decode_PB_cc(VideoState *state, MCPlane mcplanes[PLANE_COUNT], uint3
         // luma
         HVQPlaneDesc *planeY = &state->planes[0];
         MCPlane *mcplaneY = &mcplanes[0];
-        for (int i = 0; i < planeY->block_size_in_samples; ++i)
+        for (int i = 0; i < planeY->blocks_per_mcb; ++i)
         {
             BlockData *ptr = mcplaneY->payload_cur_blk;
             if (mcplaneY->rle)
             {
-                ptr[planeY->some_half_array[i]].type = block_type;
+                ptr[planeY->mcb_offset[i]].type = block_type;
                 --mcplaneY->rle;
             }
             else
             {
                 int16_t huff = decodeHuff(&state->basis_num[LUMA_IDX]);
                 if (huff)
-                    ptr[planeY->some_half_array[i]].type = block_type | huff;
+                    ptr[planeY->mcb_offset[i]].type = block_type | huff;
                 else
                 {
-                    ptr[planeY->some_half_array[i]].type = block_type;
+                    ptr[planeY->mcb_offset[i]].type = block_type;
                     mcplaneY->rle = decodeHuff(&state->basis_num_run[0]);
                 }
             }
@@ -1703,14 +1710,14 @@ static void decode_PB_cc(VideoState *state, MCPlane mcplanes[PLANE_COUNT], uint3
         HVQPlaneDesc *planeU = &state->planes[1];
         MCPlane *mcplaneU = &mcplanes[1];
         MCPlane *mcplaneV = &mcplanes[2];
-        for (int i = 0; i < planeU->block_size_in_samples; ++i)
+        for (int i = 0; i < planeU->blocks_per_mcb; ++i)
         {
             BlockData *ptrU = mcplaneU->payload_cur_blk;
             BlockData *ptrV = mcplaneV->payload_cur_blk;
             if (mcplaneU->rle)
             {
-                ptrU[planeU->some_half_array[i]].type = block_type;
-                ptrV[planeU->some_half_array[i]].type = block_type;
+                ptrU[planeU->mcb_offset[i]].type = block_type;
+                ptrV[planeU->mcb_offset[i]].type = block_type;
                 --mcplaneU->rle;
             }
             else
@@ -1718,13 +1725,13 @@ static void decode_PB_cc(VideoState *state, MCPlane mcplanes[PLANE_COUNT], uint3
                 int16_t huff = decodeHuff(&state->basis_num[CHROMA_IDX]);
                 if (huff)
                 {
-                    ptrU[planeU->some_half_array[i]].type = block_type | ((huff >> 0) & 0xF);
-                    ptrV[planeU->some_half_array[i]].type = block_type | ((huff >> 4) & 0xF);
+                    ptrU[planeU->mcb_offset[i]].type = block_type | ((huff >> 0) & 0xF);
+                    ptrV[planeU->mcb_offset[i]].type = block_type | ((huff >> 4) & 0xF);
                 }
                 else
                 {
-                    ptrU[planeU->some_half_array[i]].type = block_type;
-                    ptrV[planeU->some_half_array[i]].type = block_type;
+                    ptrU[planeU->mcb_offset[i]].type = block_type;
+                    ptrV[planeU->mcb_offset[i]].type = block_type;
                     mcplaneU->rle = decodeHuff(&state->basis_num_run[1]);
                 }
             }
@@ -1758,7 +1765,7 @@ static void spread_PB_descMap(SeqObj *seqobj, MCPlane mcplanes[PLANE_COUNT])
             setMCNextBlk(mcplanes);
                 // for all planes
                 //     top             += h_mcb_stride
-                //     payload_cur_blk += h_samp_per_block
+                //     payload_cur_blk += pb_per_mcb_x
         }
         setMCDownBlk(mcplanes);
             // for all planes
@@ -1787,11 +1794,11 @@ static void MCBlockDecDCNest(VideoState *state, MCPlane mcplanes[PLANE_COUNT])
         HVQPlaneDesc *plane = &state->planes[plane_idx];
         uint32_t stride = plane->width_in_samples;
         int32_t line = plane->h_blocks_safe;
-        for (int j = 0; j < plane->block_size_in_samples; ++j)
+        for (int j = 0; j < plane->blocks_per_mcb; ++j)
         {
             // dst is a 4x4 region
-            uint8_t *dst = mcplanes[plane_idx].top + plane->some_word_array[j];
-            int32_t block_idx = plane->some_half_array[j];
+            uint8_t *dst = mcplanes[plane_idx].top + plane->pb_offset[j];
+            int32_t block_idx = plane->mcb_offset[j];
             uint32_t value = ptr[block_idx].value;
             // block type:
             // 0: weighted
@@ -1865,12 +1872,12 @@ static void MCBlockDecMCNest(VideoState *state, MCPlane mcplanes[PLANE_COUNT], i
     {
         MCPlane *mcplane = &mcplanes[plane_idx];
         HVQPlaneDesc *plane = &state->planes[plane_idx];
-        for (int i = 0; i < plane->block_size_in_samples; ++i)
+        for (int i = 0; i < plane->blocks_per_mcb; ++i)
         {
             BlockData const *ptr = mcplane->payload_cur_blk;
-            uint8_t block_type = ptr[plane->some_half_array[i]].type & 0xF;
+            uint8_t block_type = ptr[plane->mcb_offset[i]].type & 0xF;
             // dst is a 4x4 region
-            void *dst = mcplane->top + plane->some_word_array[i];
+            void *dst = mcplane->top + plane->pb_offset[i];
             uint32_t stride = plane->width_in_samples;
             if (block_type == 6)
             {
@@ -1887,7 +1894,7 @@ static void MCBlockDecMCNest(VideoState *state, MCPlane mcplanes[PLANE_COUNT], i
                     hpel_dy = plane_dy & 1;
                 }
 #endif
-                void const *src = mcplane->target + (plane_dy >> 1) * plane->width_in_samples + (plane_dx >> 1) + plane->some_word_array[i];
+                void const *src = mcplane->target + (plane_dy >> 1) * plane->width_in_samples + (plane_dx >> 1) + plane->pb_offset[i];
                 if (block_type == 0)
                 {
                     _MotionComp(dst, stride, src, stride, hpel_dx, hpel_dy);
