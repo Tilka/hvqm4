@@ -181,6 +181,7 @@ static int16_t clamp16(int32_t v)
     return v;
 }
 
+__attribute__((unused))
 static void decode_audio(struct audio_state *state, int first_aud, uint32_t sample_count, FILE *infile, FILE *outfile, int channels)
 {
     int16_t * samples = samples = malloc(sample_count*sizeof(int16_t)*channels);
@@ -2410,6 +2411,7 @@ int main(int argc, char **argv)
 
         /* parse frames */
         struct audio_state audio_state;
+        __attribute__((unused))
         int first_aud=1;
         uint32_t vid_frame_count = 0, aud_frame_count = 0;
         int block_sample_count =0;
@@ -2441,6 +2443,7 @@ int main(int argc, char **argv)
                 /* audio */
                 aud_frame_count ++;
                 total_aud_frames ++;
+                __attribute__((unused))
                 const long audio_started = ftell(infile);
                 const uint32_t samples = get32(infile);
                 block_sample_count += samples;
