@@ -1058,29 +1058,26 @@ static void setCode(BitBuffer *dst, void const *src)
 static void Ipic_BasisNumDec(VideoState *state)
 {
     BlockData *luma_dst = state->planes[LUMA_IDX].payload;
-    uint32_t y_v_blocks = state->planes[LUMA_IDX].v_blocks;
-    BitBufferWithTree *y_tree1 = &state->basis_num[LUMA_IDX];
-    BitBufferWithTree *y_rle = &state->basis_num_run[LUMA_IDX];
+    const uint32_t luma_h_blocks = state->planes[LUMA_IDX].h_blocks;
+    const uint32_t luma_v_blocks = state->planes[LUMA_IDX].v_blocks;
     uint32_t rle = 0;
-    while (y_v_blocks--)
+    for (uint32_t y = 0; y < luma_v_blocks; ++y)
     {
-        uint32_t y_h_blocks = state->planes[0].h_blocks;
-        while (y_h_blocks--)
+        for (uint32_t x = 0; x < luma_h_blocks; ++x)
         {
             if (rle)
             {
                 luma_dst->type = 0;
-                ++luma_dst;
                 --rle;
             }
             else
             {
-                int16_t x = decodeHuff(y_tree1) & 0xFFFF;
-                if (x == 0)
-                    rle = decodeHuff(y_rle);
-                luma_dst->type = x & 0xFF;
-                ++luma_dst;
+                int16_t num = decodeHuff(&state->basis_num[LUMA_IDX]) & 0xFFFF;
+                if (num == 0)
+                    rle = decodeHuff(&state->basis_num_run[LUMA_IDX]);
+                luma_dst->type = num & 0xFF;
             }
+            ++luma_dst;
         }
         // skip borders
         luma_dst += 2;
@@ -1088,33 +1085,29 @@ static void Ipic_BasisNumDec(VideoState *state)
 
     BlockData *u_dst = state->planes[1].payload;
     BlockData *v_dst = state->planes[2].payload;
-    uint32_t uv_v_blocks = state->planes[1].v_blocks;
-    BitBufferWithTree *uv_tree1 = &state->basis_num[CHROMA_IDX];
-    BitBufferWithTree *uv_tree2 = &state->basis_num_run[CHROMA_IDX];
+    const uint32_t chroma_h_blocks = state->planes[CHROMA_IDX].h_blocks;
+    const uint32_t chroma_v_blocks = state->planes[CHROMA_IDX].v_blocks;
     rle = 0;
-    while (uv_v_blocks--)
+    for (uint32_t y = 0; y < chroma_v_blocks; ++y)
     {
-        uint32_t uv_h_blocks = state->planes[1].h_blocks;
-        while (uv_h_blocks--)
+        for(uint32_t x = 0; x < chroma_h_blocks; ++x)
         {
             if (rle)
             {
                 u_dst->type = 0;
                 v_dst->type = 0;
-                ++u_dst;
-                ++v_dst;
                 --rle;
             }
             else
             {
-                int16_t value = decodeHuff(uv_tree1) & 0xFFFF;
-                if (value == 0)
-                    rle = decodeHuff(uv_tree2);
-                u_dst->type = (value >> 0) & 0xF;
-                v_dst->type = (value >> 4) & 0xF;
-                ++u_dst;
-                ++v_dst;
+                int16_t num = decodeHuff(&state->basis_num[CHROMA_IDX]) & 0xFFFF;
+                if (num == 0)
+                    rle = decodeHuff(&state->basis_num_run[CHROMA_IDX]);
+                u_dst->type = (num >> 0) & 0xF;
+                v_dst->type = (num >> 4) & 0xF;
             }
+            ++u_dst;
+            ++v_dst;
         }
         u_dst += 2;
         v_dst += 2;
