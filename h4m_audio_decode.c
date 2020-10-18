@@ -2521,7 +2521,7 @@ int main(int argc, char **argv)
 #ifdef VERBOSE_PRINT
         printf("block %d ended at 0x%lx (%d samples)\n", (int)block_count, ftell(infile), block_sample_count);
 #endif
-        if (ftell(infile) != (data_start+expected_block_size))
+        if (ftell(infile) != (data_start+(long)expected_block_size))
         {
             fprintf(stderr, "block size mismatch\n");
             exit(EXIT_FAILURE);
