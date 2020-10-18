@@ -1524,7 +1524,7 @@ struct RLDecoder {
     uint32_t count;
 };
 
-// stream of 0 and 1
+// stream of 0 or 1
 static void initMCBproc(BitBufferWithTree *buftree, struct RLDecoder *proc)
 {
     if (buftree->buf.ptr)
@@ -1534,12 +1534,13 @@ static void initMCBproc(BitBufferWithTree *buftree, struct RLDecoder *proc)
     }
 }
 
-// stream of 0, 1 and 2
+// stream of 0, 1 or 2
 static void initMCBtype(BitBufferWithTree *buftree, struct RLDecoder *type)
 {
     if (buftree->buf.ptr)
     {
-        type->value = (getBit(&buftree->buf) << 1) | getBit(&buftree->buf);
+        uint32_t value = getBit(&buftree->buf) << 1;
+        type->value = value | getBit(&buftree->buf);
         type->count = decodeUOvfSym(buftree, 0xFF);
     }
 }
