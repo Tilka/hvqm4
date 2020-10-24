@@ -1400,12 +1400,12 @@ static void PrediAotBlock(VideoState *state, uint8_t *dst, uint8_t const *src, u
             max = value > max ? value : max;
         }
     }
-    uint32_t r28 = (decodeSOvfSym(&state->dc_values[plane_idx], state->dc_min, state->dc_max) >> state->dc_shift << state->unk_shift) - aot_sum;
-    uint32_t bla = (decodeSOvfSym(&state->dc_values[plane_idx], state->dc_min, state->dc_max) >> state->dc_shift);
-    uint32_t r18 = bla * mcdivTable[max - min];
+    uint32_t addend = (decodeSOvfSym(&state->dc_values[plane_idx], state->dc_min, state->dc_max) >> state->dc_shift << state->unk_shift) - aot_sum;
+    uint32_t factor = (decodeSOvfSym(&state->dc_values[plane_idx], state->dc_min, state->dc_max) >> state->dc_shift);
+    factor *= mcdivTable[max - min];
     for (int i = 0; i < 4; ++i)
         for (int j = 0; j < 4; ++j)
-            result[i][j] += r28 + diff[i][j] * r18;
+            result[i][j] += addend + diff[i][j] * factor;
 
     for (int i = 0; i < 4; ++i)
     {
@@ -1917,10 +1917,10 @@ static void BpicPlaneDec(SeqObj *seqobj, void *present, void *past, void *future
     int32_t mv_h, mv_v;
     int32_t reference_frame = -1;
     // MC blocks are 8x8 pixels
-    for (int i = 0; i < seqobj->height; i += 8)
+    for (int y = 0; y < seqobj->height; y += 8)
     {
         setMCTop(mcplanes);
-        for (int j = 0; j < seqobj->width; j += 8)
+        for (int x = 0; x < seqobj->width; x += 8)
         {
             uint8_t bits = mcplanes[0].payload_cur_blk->type;
             // 0: intra
@@ -1947,12 +1947,17 @@ static void BpicPlaneDec(SeqObj *seqobj, void *present, void *past, void *future
                 }
                 getMVector(&mv_h, &state->mv_h, state->mc_residual_bits_h[reference_frame]);
                 getMVector(&mv_v, &state->mv_v, state->mc_residual_bits_v[reference_frame]);
+
+                // compute half-pixel position of reference macroblock
+                uint32_t ref_x = x * 2 + mv_h;
+                uint32_t ref_y = y * 2 + mv_v;
+
                 // see getMCBproc()
                 int mcb_proc = (bits >> 4) & 1;
                 if (mcb_proc == 0)
-                    MCBlockDecMCNest(state, mcplanes, j*2 + mv_h, i*2 + mv_v);
+                    MCBlockDecMCNest(state, mcplanes, ref_x, ref_y);
                 else
-                    MotionComp(state, mcplanes, j*2 + mv_h, i*2 + mv_v);
+                    MotionComp(state, mcplanes, ref_x, ref_y);
             }
             setMCNextBlk(mcplanes);
         }
@@ -2342,7 +2347,7 @@ static void decv_init(Player *player)
     player->future  = malloc(picsize);
 }
 
-#ifndef HVQM4_NOMAIN
+#ifndef HVQM4_FFMPEG
 int main(int argc, char **argv)
 {
     printf("h4m 'HVQM4 1.3/1.5' decoder 0.4 by flacs/hcs\n\n");
