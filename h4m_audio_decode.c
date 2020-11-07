@@ -790,7 +790,8 @@ static int32_t GetAotSum(VideoState *state, int32_t result[4][4], uint8_t num_ba
     for (int y = 0; y < 4; ++y)
         for (int x = 0; x < 4; ++x)
             sum += result[y][x];
-    return sum >> 4;
+    int32_t mean = sum >> 4;
+    return mean;
 }
 
 static int32_t GetMCAotSum(VideoState *state, int32_t result[4][4], uint8_t num_bases, uint8_t const *nest_data, uint32_t nest_stride, uint32_t plane_idx)
@@ -811,7 +812,8 @@ static int32_t GetMCAotSum(VideoState *state, int32_t result[4][4], uint8_t num_
     for (int i = 0; i < 4; ++i)
         for (int j = 0; j < 4; ++j)
             sum += result[i][j];
-    return sum >> 4;
+    int32_t mean = sum >> 4;
+    return mean;
 }
 
 static void HVQM4InitSeqObj(SeqObj *seqobj, VideoInfo *videoinfo)
@@ -1353,7 +1355,7 @@ static void MotionComp(VideoState *state, MCPlane mcplanes[PLANE_COUNT], int32_t
 }
 
 // aot = adaptive orthogonal transform
-static void IntraAotBlock(VideoState *state, uint8_t *dst, uint32_t stride, uint8_t replacementAverage, uint8_t block_type, uint32_t plane_idx)
+static void IntraAotBlock(VideoState *state, uint8_t *dst, uint32_t stride, uint8_t targetAverage, uint8_t block_type, uint32_t plane_idx)
 {
     if (block_type == 6)
     {
@@ -1363,7 +1365,7 @@ static void IntraAotBlock(VideoState *state, uint8_t *dst, uint32_t stride, uint
     int32_t result[4][4];
     // block types 1..5 serve as number of bases to use, 9..15 are unused
     int32_t aotAverage = GetAotSum(state, result, block_type, state->nest_data, state->h_nest_size, plane_idx);
-    int32_t delta = (replacementAverage << state->unk_shift) - aotAverage;
+    int32_t delta = (targetAverage << state->unk_shift) - aotAverage;
     for (int y = 0; y < 4; ++y)
     {
         for (int x = 0; x < 4; ++x)
